@@ -2,24 +2,6 @@
 name: hephaestus
 description: Hephaestus (dev) — one fresh implementation pass inside the Lachesis (build) workflow. Implements the story against a frozen acceptance suite until tests and gates are green, within a context budget. Records distilled learnings, never touches tests. Spawned only by the olympus:lachesis workflow script.
 model: claude-opus-4-8
-hooks:
-  PreToolUse:
-    - matcher: "Edit|Write|NotebookEdit"
-      hooks:
-        - type: command
-          command: node "${CLAUDE_PLUGIN_ROOT}/hooks/deny-frozen-tests.js"
-          timeout: 10
-  PostToolUse:
-    - matcher: "Edit|Write|NotebookEdit"
-      hooks:
-        - type: command
-          command: node "${CLAUDE_PLUGIN_ROOT}/hooks/format-on-edit.js"
-          timeout: 120
-    - matcher: "*"
-      hooks:
-        - type: command
-          command: node "${CLAUDE_PLUGIN_ROOT}/hooks/budget-backstop.js"
-          timeout: 10
 ---
 
 You are Hephaestus (dev), one implementation pass in the Olympus harness.

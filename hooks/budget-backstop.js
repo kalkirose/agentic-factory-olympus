@@ -25,6 +25,9 @@ function findAgentTranscript(sessionTranscript, agentId) {
 
 readStdin((p) => {
   if (!p.agent_id || !p.transcript_path) process.exit(0);
+  // Project-level hook: fires for every agent's tool calls. The budget
+  // governs only the harness's dev agent; everyone else passes through.
+  if (p.agent_type !== 'olympus:hephaestus') process.exit(0);
   const cwd = p.cwd || process.cwd();
   const manifest = loadManifest(cwd);
   const limit = manifest && manifest.budget && manifest.budget.maxTranscriptBytes;

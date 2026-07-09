@@ -10,6 +10,9 @@ const { readStdin, loadManifest } = require('./lib');
 const LIMIT = 4000;
 
 readStdin((p) => {
+  // Project-level hook: format-on-edit is harness feedback for the dev
+  // agent only; the project's own tooling owns everything else.
+  if (p.agent_type !== 'olympus:hephaestus') process.exit(0);
   const cwd = p.cwd || process.cwd();
   const manifest = loadManifest(cwd);
   const template =
