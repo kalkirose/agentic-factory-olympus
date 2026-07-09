@@ -75,6 +75,7 @@ if (cmd === 'init') {
       hooks: config.hooks || {},
       conventions: config.conventions || {},
       docPaths: config.docPaths || {},
+      infraFlakeSignatures: config.infraFlakeSignatures || [],
       learningsPath: path
         .join('.olympus', 'state', 'runs', safeId, 'learnings.md')
         .replace(/\\/g, '/'),

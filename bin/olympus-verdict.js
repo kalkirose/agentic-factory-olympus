@@ -14,7 +14,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { run, git, loadManifest, printAndExit } = require('./olympus-exec-lib');
+const { run, git, loadManifest, printAndExit, runWithFlakeRetry } = require('./olympus-exec-lib');
 
 const cwd = process.cwd();
 const args = process.argv.slice(2);
@@ -64,22 +64,28 @@ if (pass) {
   check('test-integrity', { ok: diff.ok && changed === '', exitCode: diff.exitCode, tail: changed }, 'frozen test paths differ from the frozen SHA');
 }
 
-// 4. Frozen suite, every configured layer.
+// 4. Frozen suite, every configured layer. Failures matching a declared
+// infra-flake signature retry once; every retry is flagged, never silent.
+const flakeFlags = [];
+const signatures = manifest.infraFlakeSignatures || [];
 if (pass) {
   const layers = Array.isArray(manifest.commands.fullSuite)
     ? manifest.commands.fullSuite
     : [{ name: 'suite', command: manifest.commands.fullSuite }];
   for (const layer of layers) {
     if (!layer || !layer.command) continue;
-    const r = run(layer.command, cwd);
-    check(`suite:${layer.name || 'suite'}`, r);
-    if (!r.ok) break; // fail fast; remaining layers would waste minutes
+    const { result, retried, matchedSignature } = runWithFlakeRetry(layer.command, cwd, signatures);
+    if (retried) flakeFlags.push({ name: 'infra-flake-retry', layer: layer.name, signature: matchedSignature, recovered: result.ok });
+    check(`suite:${layer.name || 'suite'}`, result);
+    if (!result.ok) break; // fail fast; remaining layers would waste minutes
   }
 }
 
 // 5. Typecheck.
 if (pass && manifest.commands.typecheck) {
-  check('typecheck', run(manifest.commands.typecheck, cwd));
+  const { result, retried, matchedSignature } = runWithFlakeRetry(manifest.commands.typecheck, cwd, signatures);
+  if (retried) flakeFlags.push({ name: 'infra-flake-retry', layer: 'typecheck', signature: matchedSignature, recovered: result.ok });
+  check('typecheck', result);
 }
 
 // Informational: lockfile drift (dependency gate hardens in Phase B).
@@ -92,7 +98,7 @@ const verdict = {
   pass,
   passNumber: passN ? Number(passN) : null,
   checks,
-  flags: lockChanged ? [{ name: 'lockfile-changed', files: lockChanged.split(/\r?\n/) }] : [],
+  flags: flakeFlags.concat(lockChanged ? [{ name: 'lockfile-changed', files: lockChanged.split(/\r?\n/) }] : []),
   at: new Date().toISOString(),
 };
 

@@ -29,6 +29,7 @@ Prometheus writes the file.
 | `commands.typecheck` | verdict script, Hephaestus (dev) | Hard verdict gate. |
 | `commands.targetedHint` | Hephaestus (dev) | How to run a narrow slice while iterating; advisory only. |
 | `budget.maxTranscriptBytes` | budget-backstop hook | Per-pass context ceiling; a breach ends the pass as failed. |
+| `infraFlakeSignatures` | verdict + red-state scripts | Regexes for known *infrastructure* failures (never test assertions). A failing layer whose output matches retries once; the retry is flagged in the verdict JSON, never silent. |
 | `hooks.formatOnEditCommand` | format-on-edit hook | Run after every dev edit; `{file}` is replaced with the edited path. Omit to disable. |
 | `conventions` | branch/freeze scripts, Hebe (pr) | Branch naming (`{unit}` substituted), PR target, title prefix. |
 | `docPaths` | Cassandra (spec), Daedalus (tests), Hephaestus (dev) | Pointers, not dumps: agents retrieve these on demand. |

@@ -40,6 +40,26 @@ function git(argsStr, cwd) {
   return run(`git ${argsStr}`, cwd);
 }
 
+// Run a command; on failure whose output matches a declared infrastructure
+// flake signature (regex strings from project config), retry ONCE. The
+// retry is reported, never silent — callers must surface `retried`.
+function runWithFlakeRetry(cmd, cwd, signatures) {
+  const first = run(cmd, cwd);
+  if (first.ok || !Array.isArray(signatures) || !signatures.length) {
+    return { result: first, retried: false };
+  }
+  const matched = signatures.find((s) => {
+    try {
+      return new RegExp(s, 'i').test(first.tail);
+    } catch (e) {
+      return false;
+    }
+  });
+  if (!matched) return { result: first, retried: false };
+  const second = run(cmd, cwd);
+  return { result: second, retried: true, matchedSignature: matched, firstTail: first.tail };
+}
+
 function loadManifest(cwd) {
   const activePath = path.join(cwd, '.olympus', 'state', 'active-run.json');
   const active = JSON.parse(fs.readFileSync(activePath, 'utf8'));
@@ -59,4 +79,4 @@ function printAndExit(obj, code = 0) {
   process.exit(code);
 }
 
-module.exports = { run, git, tail, loadManifest, saveManifest, printAndExit };
+module.exports = { run, git, tail, loadManifest, saveManifest, printAndExit, runWithFlakeRetry };

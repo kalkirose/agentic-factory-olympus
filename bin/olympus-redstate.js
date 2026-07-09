@@ -5,7 +5,7 @@
 //
 //   olympus-redstate
 'use strict';
-const { run, loadManifest, printAndExit } = require('./olympus-exec-lib');
+const { loadManifest, printAndExit, runWithFlakeRetry } = require('./olympus-exec-lib');
 
 const cwd = process.cwd();
 let manifest;
@@ -20,15 +20,19 @@ const layers = Array.isArray(manifest.commands.fullSuite)
   : [{ name: 'suite', command: manifest.commands.fullSuite }];
 
 const results = [];
+const signatures = manifest.infraFlakeSignatures || [];
 for (const layer of layers) {
   if (!layer || !layer.command) continue;
-  const r = run(layer.command, cwd);
+  // An infra flake here would masquerade as "red for the wrong reason" and
+  // mislead the validator — retry declared signatures once, flagged.
+  const { result, retried, matchedSignature } = runWithFlakeRetry(layer.command, cwd, signatures);
   results.push({
     name: layer.name || 'suite',
     command: layer.command,
-    exitCode: r.exitCode,
-    red: !r.ok, // red (failing) is the EXPECTED state here
-    tail: r.tail,
+    exitCode: result.exitCode,
+    red: !result.ok, // red (failing) is the EXPECTED state here
+    tail: result.tail,
+    ...(retried ? { infraFlakeRetry: { signature: matchedSignature, recovered: result.ok } } : {}),
   });
 }
 

@@ -25,6 +25,10 @@
     "maxTranscriptBytes": 8000000
   },
 
+  "infraFlakeSignatures": [
+    "EPERM: operation not permitted, rename.*(Temp|tmp)"
+  ],
+
   "hooks": {
     "formatOnEditCommand": "npx prettier --write {file}"
   },
