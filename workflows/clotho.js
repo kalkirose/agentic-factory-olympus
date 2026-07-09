@@ -28,7 +28,7 @@ async function talos(scriptWithArgs, label, phaseName) {
       `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
       `and set "ok" to whether the script itself reported ok:true. ` +
       `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
-    { agentType: 'talos', schema: TALOS_SCHEMA, label, phase: phaseName, effort: 'low' }
+    { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label, phase: phaseName, effort: 'low' }
   )
   if (!r) throw new Error(`talos relay returned nothing for: ${scriptWithArgs}`)
   return r
@@ -60,7 +60,7 @@ const iris = await agent(
     ? `The unit of work to check is "${requestedUnit}". Do not pick a different one.\n`
     : `Find the next unit of work using the project's next-unit query in .olympus/config.json.\n`) +
     `Then run the full readiness check from your definition. Include the path to the unit's spec file as specPath.`,
-  { agentType: 'iris', schema: IRIS_SCHEMA, label: 'iris:readiness', phase: 'Readiness', effort: 'xhigh' }
+  { agentType: 'olympus:iris', schema: IRIS_SCHEMA, label: 'iris:readiness', phase: 'Readiness', effort: 'xhigh' }
 )
 if (!iris) throw new Error('Iris (scout) returned nothing')
 if (!iris.ready) {
@@ -116,7 +116,7 @@ if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
     `Validate the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}).\n` +
       `Doc pointers live in .olympus/config.json under docPaths — retrieve on demand.\n` +
       `Write your findings file to "${findingsPath}". Run all three checks from your definition.`,
-    { agentType: 'cassandra', schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
+    { agentType: 'olympus:cassandra', schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
   )
   if (!cassandra) throw new Error('Cassandra (spec) returned nothing')
   const hard = cassandra.findings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'REVISION')
@@ -181,7 +181,7 @@ if (!frozen) {
             ? `REPAIR ROUND: the validator blocked the previous suite. Fix exactly these findings:\n${argusFindings}\n`
             : '') +
           `Work on the current branch (${baseBranch}). Do not commit; the freeze step commits.`,
-        { agentType: 'daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:author-r${round}`, phase: 'Tests', effort: 'xhigh' }
+        { agentType: 'olympus:daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:author-r${round}`, phase: 'Tests', effort: 'xhigh' }
       )
       if (!suite) throw new Error('Daedalus (tests) returned nothing')
     }
@@ -194,7 +194,7 @@ if (!frozen) {
         `Spec: "${iris.specPath}". Matrix: "${suite.matrixPath}". Test files: ${suite.testFiles.join(', ')}.\n` +
         `Red-state run results (raw):\n${JSON.stringify(red.output.results || red.output)}\n` +
         `Run every check from your definition.`,
-      { agentType: 'argus', schema: ARGUS_SCHEMA, label: `argus:validate-r${round}`, phase: 'Tests', effort: 'xhigh' }
+      { agentType: 'olympus:argus', schema: ARGUS_SCHEMA, label: `argus:validate-r${round}`, phase: 'Tests', effort: 'xhigh' }
     )
     if (!argus) throw new Error('Argus (validator) returned nothing')
 

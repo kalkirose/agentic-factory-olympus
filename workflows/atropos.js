@@ -21,7 +21,7 @@ async function talos(scriptWithArgs, label) {
       `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
       `and set "ok" to whether the script itself reported ok:true. ` +
       `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
-    { agentType: 'talos', schema: TALOS_SCHEMA, label, phase: 'Ship', effort: 'low' }
+    { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label, phase: 'Ship', effort: 'low' }
   )
   if (!r) throw new Error(`talos relay returned nothing for: ${scriptWithArgs}`)
   return r
@@ -76,7 +76,7 @@ const hebe = await agent(
     `judge rationale: ${manifest.judge.rationale}; ` +
     `flagged decisions a human must see: ${flagged.length ? flagged.join('; ') : 'none'}.\n` +
     `Write the PR body per your definition, open the PR, watch every merge check to completion, report outcomes.`,
-  { agentType: 'hebe', schema: HEBE_SCHEMA, label: 'hebe:pr', phase: 'Ship', effort: 'xhigh' }
+  { agentType: 'olympus:hebe', schema: HEBE_SCHEMA, label: 'hebe:pr', phase: 'Ship', effort: 'xhigh' }
 )
 if (!hebe) throw new Error('Hebe (pr) returned nothing')
 

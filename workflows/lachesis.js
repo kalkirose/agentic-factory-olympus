@@ -28,7 +28,7 @@ async function talos(scriptWithArgs, label, phaseName) {
       `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
       `and set "ok" to whether the script itself reported ok:true. ` +
       `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
-    { agentType: 'talos', schema: TALOS_SCHEMA, label, phase: phaseName, effort: 'low' }
+    { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label, phase: phaseName, effort: 'low' }
   )
   if (!r) throw new Error(`talos relay returned nothing for: ${scriptWithArgs}`)
   return r
@@ -109,7 +109,7 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
   if (!br.ok) return escalate('lachesis:state', [`branch create failed for pass ${n}: ${br.errorTail || JSON.stringify(br.output)}`])
 
   let dev = await agent(contextPackage(n), {
-    agentType: 'hephaestus',
+    agentType: 'olympus:hephaestus',
     schema: HEPHAESTUS_SCHEMA,
     label: `hephaestus:pass-${n}`,
     phase: 'Build loop',
@@ -118,7 +118,7 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
   if (!dev) {
     log(`Pass ${n}: spawn glitch (empty return); re-dispatching once`)
     dev = await agent(contextPackage(n), {
-      agentType: 'hephaestus',
+      agentType: 'olympus:hephaestus',
       schema: HEPHAESTUS_SCHEMA,
       label: `hephaestus:pass-${n}-retry`,
       phase: 'Build loop',
@@ -140,7 +140,7 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
           `\n\nCONTINUATION OF PASS ${n}: the official verdict failed on branch ${branch}. ` +
           `Your prior commits are on the branch; fix exactly what these findings name, re-run, commit, report.\n` +
           `Findings:\n${findings}`,
-        { agentType: 'hephaestus', schema: HEPHAESTUS_SCHEMA, label: `hephaestus:pass-${n}-cont`, phase: 'Build loop', effort: 'max' }
+        { agentType: 'olympus:hephaestus', schema: HEPHAESTUS_SCHEMA, label: `hephaestus:pass-${n}-cont`, phase: 'Build loop', effort: 'max' }
       )
       if (!dev) break
       verdict = await runVerdict(n, branch)
@@ -174,7 +174,7 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
       `Between-pass check for unit ${unitId}. Learnings file: "${manifest.learningsPath}". ` +
         `Run state: ${JSON.stringify(passes.map((p) => ({ n: p.n, outcome: p.outcome, failed: p.verdict && p.verdict.failed })))}.\n` +
         `Make the continue/abort call and consolidate the learnings file per your definition.`,
-      { agentType: 'mentor', schema: MENTOR_SCHEMA, label: `mentor:after-${n}`, phase: 'Build loop', effort: 'xhigh' }
+      { agentType: 'olympus:mentor', schema: MENTOR_SCHEMA, label: `mentor:after-${n}`, phase: 'Build loop', effort: 'xhigh' }
     )
     if (mentor && mentor.decision === 'abort') {
       await talos(`olympus-state step build-loop aborted ${esc({ route: mentor.route, evidence: mentor.evidence })}`, 'talos:abort', 'Build loop')
@@ -217,7 +217,7 @@ const minos = await agent(
     `Frozen base SHA: ${frozen.sha}. Candidates (in pass order — score strictly one at a time, in this order): ${greenBranches.join(', ')}.\n` +
     `Read each candidate's diff with: git diff ${frozen.sha}..<branch>. Follow the isolation protocol and rubric in your definition. ` +
     `Tie goes to the later pass.`,
-  { agentType: 'minos', schema: MINOS_SCHEMA, label: 'minos:judge', phase: 'Judge', effort: 'xhigh' }
+  { agentType: 'olympus:minos', schema: MINOS_SCHEMA, label: 'minos:judge', phase: 'Judge', effort: 'xhigh' }
 )
 if (!minos || !greenBranches.includes(minos.winner)) {
   return escalate('lachesis:judge', ['Minos (judge) failed to return a valid pick'], { candidates: greenBranches })
