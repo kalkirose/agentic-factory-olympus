@@ -7,10 +7,20 @@
 'use strict';
 const { git, loadManifest, saveManifest, printAndExit } = require('./olympus-exec-lib');
 
+const path = require('path');
 const cwd = process.cwd();
 const args = process.argv.slice(2);
 const i = args.indexOf('--paths');
-const paths = i >= 0 && args[i + 1] ? args[i + 1].split(',').map((s) => s.trim()).filter(Boolean) : [];
+// Record repo-relative, forward-slash paths regardless of what the author
+// agent returned — the verdict diff and the deny hook consume these.
+const paths =
+  i >= 0 && args[i + 1]
+    ? args[i + 1]
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((p) => (path.isAbsolute(p) ? path.relative(cwd, p) : p).replace(/\\/g, '/'))
+    : [];
 if (!paths.length) printAndExit({ ok: false, error: 'usage: olympus-freeze --paths <p1,p2,...>' }, 1);
 
 let manifest, manifestPath;
