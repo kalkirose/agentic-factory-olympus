@@ -1,0 +1,14 @@
+{
+  "name": "olympus",
+  "description": "Self-hosting marketplace for the Olympus development harness plugin.",
+  "owner": {
+    "name": "Kalki Rose"
+  },
+  "plugins": [
+    {
+      "name": "olympus",
+      "source": "./",
+      "description": "A deterministic multi-agent development harness for Claude Code."
+    }
+  ]
+}
