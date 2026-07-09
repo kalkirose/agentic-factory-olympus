@@ -1,16 +1,16 @@
 export const meta = {
   name: 'lachesis',
-  description: 'Lachesis (build): the dev loop. Fresh passes against the frozen suite until 3 greens or 6 passes; script-owned verdict; Minos picks the winner.',
+  description: 'Lachesis (build): the dev loop. Fresh passes against the frozen suite until 3 greens or 6 passes. Official verdict = deterministic Tier-1 gates + evidence-verified Fury findings; Minos picks the winner.',
   whenToUse: 'Second phase of an Olympus run. Requires a frozen suite from Clotho.',
   phases: [
-    { title: 'Build loop', detail: 'fresh Hephaestus per pass; Mentor between passes; verdict per pass' },
+    { title: 'Build loop', detail: 'fresh Hephaestus per pass; Tier-1 verdict + Furies + verification; Mentor between passes' },
     { title: 'Judge', detail: 'Minos scores green branches independently and picks' },
   ],
 }
 
 const GREENS_TARGET = 3
 const MAX_PASSES = 6
-const MAX_CONTINUATIONS_PER_PASS = 1
+const MAX_CONTINUATIONS_PER_PASS = 2
 
 const TALOS_SCHEMA = {
   type: 'object',
@@ -50,6 +50,7 @@ const unitId = manifest.unitId
 const safeId = unitId.replace(/[^a-zA-Z0-9._-]/g, '-')
 const baseBranch = (manifest.conventions.branchTemplate || 'olympus/{unit}').replace('{unit}', safeId)
 const passes = Array.isArray(manifest.passes) ? manifest.passes.slice() : []
+const lowFindingsLedger = (manifest.furies && manifest.furies.lowFindings) || []
 if (passes.length) log(`Resuming: ${passes.length} pass(es) recorded, ${passes.filter((p) => p.outcome === 'green').length} green`)
 
 const HEPHAESTUS_SCHEMA = {
@@ -71,6 +72,45 @@ const MENTOR_SCHEMA = {
     consolidated: { type: 'string' },
   },
   required: ['decision', 'route', 'evidence', 'consolidated'],
+}
+const FURY_SCHEMA = {
+  type: 'object',
+  properties: {
+    verdict: { type: 'string', enum: ['pass', 'findings'] },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          severity: { type: 'string', enum: ['HIGH', 'LOW'] },
+          location: { type: 'string' },
+          defect: { type: 'string' },
+          evidence: { type: 'string' },
+        },
+        required: ['severity', 'location', 'defect', 'evidence'],
+      },
+    },
+    summary: { type: 'string' },
+  },
+  required: ['verdict', 'findings', 'summary'],
+}
+const VERIFIER_SCHEMA = {
+  type: 'object',
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          index: { type: 'number' },
+          verdict: { type: 'string', enum: ['CONFIRMED', 'REFUTED', 'UNVERIFIABLE'] },
+          evidence: { type: 'string' },
+        },
+        required: ['index', 'verdict', 'evidence'],
+      },
+    },
+  },
+  required: ['results'],
 }
 
 function contextPackage(passN) {
@@ -97,6 +137,62 @@ function failedChecksSummary(verdict) {
     .filter((c) => !c.ok)
     .map((c) => `${c.name} (exit ${c.exitCode}):\n${c.tail}`)
     .join('\n---\n')
+}
+
+const FURY_DIMENSIONS = [
+  { key: 'spec', agentType: 'olympus:fury-spec' },
+  { key: 'architecture', agentType: 'olympus:fury-architecture' },
+  { key: 'minimality', agentType: 'olympus:fury-minimality' },
+  { key: 'security', agentType: 'olympus:fury-security' },
+  { key: 'operational', agentType: 'olympus:fury-operational' },
+]
+
+// Tier 2: the Furies in parallel, then the verification pass. Returns
+// { confirmedHighs: [...], lows: [...] }. Only CONFIRMED HIGHs may block.
+async function runFuries(n, branch, onlyKeys) {
+  const diffFiles = await talos(`olympus-branch difffiles --from ${frozen.sha}`, `talos:difffiles-${n}`, 'Build loop')
+  const files = (diffFiles.ok && diffFiles.output.files) || []
+  const uiTouched = (manifest.uiPathPatterns || []).some((pat) => {
+    try {
+      const re = new RegExp(pat)
+      return files.some((f) => re.test(f))
+    } catch (e) {
+      return false
+    }
+  })
+  const dims = FURY_DIMENSIONS.filter((d) => !onlyKeys || onlyKeys.includes(d.key)).concat(
+    uiTouched && (!onlyKeys || onlyKeys.includes('interface'))
+      ? [{ key: 'interface', agentType: 'olympus:fury-interface' }]
+      : []
+  )
+  const furyPrompt = (d) =>
+    `Official gate review for unit ${unitId}, pass ${n}, branch ${branch}.\n` +
+    `The diff: run \`git diff ${frozen.sha}..HEAD\` (you are on the branch). Changed files: ${files.join(', ') || '(none reported)'}.\n` +
+    `Validated spec: "${manifest.spec.path}". Doc pointers: .olympus/config.json (docPaths).\n` +
+    `Apply your definition's sweep and operating rules. Severity HIGH only where your definition allows it.`
+  const results = await parallel(
+    dims.map((d) => () =>
+      agent(furyPrompt(d), { agentType: d.agentType, schema: FURY_SCHEMA, label: `fury:${d.key}-${n}`, phase: 'Build loop', effort: 'xhigh' }).then(
+        (r) => r && { key: d.key, ...r }
+      )
+    )
+  )
+  const clean = results.filter(Boolean)
+  const highs = clean.flatMap((r) => r.findings.filter((f) => f.severity === 'HIGH').map((f) => ({ ...f, fury: r.key })))
+  const lows = clean.flatMap((r) => r.findings.filter((f) => f.severity === 'LOW').map((f) => `${r.key}: ${f.defect} (${f.location})`))
+
+  if (!highs.length) return { confirmedHighs: [], lows, furiesRun: dims.map((d) => d.key) }
+
+  const verifier = await agent(
+    `Verify these HIGH gate findings for unit ${unitId} on branch ${branch} (diff base ${frozen.sha}).\n` +
+      highs.map((f, i) => `[${i}] (${f.fury}) ${f.defect} — at ${f.location}; gate's evidence: ${f.evidence}`).join('\n') +
+      `\nApply your definition: CONFIRMED / REFUTED / UNVERIFIABLE per finding, with settling evidence. Use the finding's [index].`,
+    { agentType: 'olympus:fury-verifier', schema: VERIFIER_SCHEMA, label: `fury:verify-${n}`, phase: 'Build loop', effort: 'xhigh' }
+  )
+  const confirmed = verifier
+    ? verifier.results.filter((r) => r.verdict === 'CONFIRMED').map((r) => ({ ...highs[r.index], verifierEvidence: r.evidence }))
+    : highs // verifier glitch: fail safe toward keeping findings visible
+  return { confirmedHighs: confirmed.filter(Boolean), lows, furiesRun: dims.map((d) => d.key) }
 }
 
 // -------------------------------------------------------------- The Q4 loop
@@ -129,27 +225,52 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
 
   let outcome = 'failed'
   let verdict = null
+  let fury = null
   if (dev) {
-    verdict = await runVerdict(n, branch)
     let continuations = 0
-    while (!verdict.pass && !dev.stoppedForBudget && continuations < MAX_CONTINUATIONS_PER_PASS) {
+    verdict = await runVerdict(n, branch)
+    while (continuations <= MAX_CONTINUATIONS_PER_PASS) {
+      if (!verdict.pass) {
+        if (dev.stoppedForBudget || continuations === MAX_CONTINUATIONS_PER_PASS) break
+        continuations++
+        log(`Pass ${n}: Tier-1 verdict failed; findings back to the dev (continuation ${continuations})`)
+        dev = await agent(
+          contextPackage(n) +
+            `\n\nCONTINUATION OF PASS ${n}: the official verdict failed on branch ${branch}. ` +
+            `Your prior commits are on the branch; fix exactly what these findings name, re-run, commit, report.\nFindings:\n${failedChecksSummary(verdict)}`,
+          { agentType: 'olympus:hephaestus', schema: HEPHAESTUS_SCHEMA, label: `hephaestus:pass-${n}-cont${continuations}`, phase: 'Build loop', effort: 'max' }
+        )
+        if (!dev) break
+        verdict = await runVerdict(n, branch)
+        continue
+      }
+      // Tier 1 green — Tier 2 (only re-run the dimensions that blocked last round).
+      const rerunKeys = fury ? fury.confirmedHighs.map((f) => f.fury) : null
+      fury = await runFuries(n, branch, rerunKeys && rerunKeys.length ? Array.from(new Set(rerunKeys)) : null)
+      if (!fury.confirmedHighs.length) {
+        outcome = 'green'
+        break
+      }
+      if (dev.stoppedForBudget || continuations === MAX_CONTINUATIONS_PER_PASS) break
       continuations++
-      const findings = failedChecksSummary(verdict)
-      log(`Pass ${n}: verdict failed; handing findings back (continuation ${continuations})`)
+      log(`Pass ${n}: ${fury.confirmedHighs.length} verified gate finding(s); back to the dev (continuation ${continuations})`)
       dev = await agent(
         contextPackage(n) +
-          `\n\nCONTINUATION OF PASS ${n}: the official verdict failed on branch ${branch}. ` +
-          `Your prior commits are on the branch; fix exactly what these findings name, re-run, commit, report.\n` +
-          `Findings:\n${findings}`,
-        { agentType: 'olympus:hephaestus', schema: HEPHAESTUS_SCHEMA, label: `hephaestus:pass-${n}-cont`, phase: 'Build loop', effort: 'max' }
+          `\n\nCONTINUATION OF PASS ${n}: the official gate agents found verified defects on branch ${branch}. ` +
+          `Fix exactly these, re-run your advisory checks, commit, report.\n` +
+          fury.confirmedHighs.map((f) => `- (${f.fury}) ${f.defect} — at ${f.location}. Evidence: ${f.verifierEvidence || f.evidence}`).join('\n'),
+        { agentType: 'olympus:hephaestus', schema: HEPHAESTUS_SCHEMA, label: `hephaestus:pass-${n}-cont${continuations}`, phase: 'Build loop', effort: 'max' }
       )
       if (!dev) break
       verdict = await runVerdict(n, branch)
     }
-    if (verdict.pass) outcome = 'green'
-    else if (dev && dev.stoppedForBudget) outcome = 'budget'
+    if (outcome !== 'green' && dev && dev.stoppedForBudget) outcome = 'budget'
   } else {
     outcome = 'spawn-glitch'
+  }
+
+  if (fury && fury.lows.length) {
+    for (const l of fury.lows) if (!lowFindingsLedger.includes(l)) lowFindingsLedger.push(l)
   }
 
   const entry = {
@@ -159,15 +280,15 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
     summary: dev ? dev.summary : 'agent returned nothing twice',
     flaggedDecisions: dev ? dev.flaggedDecisions : [],
     verdict: verdict ? { pass: verdict.pass, failed: (verdict.checks || []).filter((c) => !c.ok).map((c) => c.name), flags: verdict.flags || [] } : null,
+    furies: fury ? { run: fury.furiesRun, unresolvedHighs: outcome === 'green' ? 0 : fury.confirmedHighs.length } : null,
   }
   passes.push(entry)
   if (outcome === 'green') greens++
   else {
-    // Losing/failed branches are deleted at the end; failed ones now (4b: only greens persist).
     await talos(`olympus-branch create --name "${baseBranch}" --from ${frozen.sha}`, `talos:park-${n}`, 'Build loop')
     await talos(`olympus-branch delete --name "${branch}"`, `talos:cleanup-${n}`, 'Build loop')
   }
-  await talos(`olympus-state merge ${esc({ passes })}`, `talos:record-${n}`, 'Build loop')
+  await talos(`olympus-state merge ${esc({ passes, furies: { lowFindings: lowFindingsLedger.slice(0, 40) } })}`, `talos:record-${n}`, 'Build loop')
   await talos(`olympus-state step pass-${n} ${outcome} ${esc({ branch })}`, `talos:step-${n}-end`, 'Build loop')
   log(`Pass ${n}: ${outcome} (${greens}/${GREENS_TARGET} green, ${passes.length}/${MAX_PASSES} passes)`)
 
@@ -226,8 +347,6 @@ if (!minos || !greenBranches.includes(minos.winner)) {
   return escalate('lachesis:judge', ['Minos (judge) failed to return a valid pick'], { candidates: greenBranches })
 }
 
-// Check the winner out first: HEAD may sit on a losing branch, and the
-// delete script refuses to remove the checked-out branch.
 const co = await talos(`olympus-branch checkout --name "${minos.winner}"`, 'talos:checkout-winner', 'Judge')
 if (!co.ok) return escalate('lachesis:state', [`could not check out winner: ${co.errorTail || JSON.stringify(co.output)}`])
 for (const b of greenBranches) {

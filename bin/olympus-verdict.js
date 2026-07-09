@@ -88,6 +88,19 @@ if (pass && manifest.commands.typecheck) {
   check('typecheck', result);
 }
 
+// 6. Additional deterministic Tier-1 gates from config (commands.gates:
+// [{name, command}] — prohibited patterns, token conformance, duplication,
+// dependency rules, mutation… whatever the project declares).
+if (pass && Array.isArray(manifest.commands.gates)) {
+  for (const gate of manifest.commands.gates) {
+    if (!gate || !gate.command) continue;
+    const { result, retried, matchedSignature } = runWithFlakeRetry(gate.command, cwd, signatures);
+    if (retried) flakeFlags.push({ name: 'infra-flake-retry', layer: gate.name, signature: matchedSignature, recovered: result.ok });
+    check(`gate:${gate.name || 'gate'}`, result);
+    if (!result.ok) break;
+  }
+}
+
 // Informational: lockfile drift (dependency gate hardens in Phase B).
 const lockfiles = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'Cargo.lock', 'poetry.lock'];
 const lockDiff = git(`diff --name-only ${frozen.sha} HEAD -- ${lockfiles.join(' ')}`, cwd);

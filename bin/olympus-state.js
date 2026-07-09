@@ -76,6 +76,7 @@ if (cmd === 'init') {
       conventions: config.conventions || {},
       docPaths: config.docPaths || {},
       infraFlakeSignatures: config.infraFlakeSignatures || [],
+      uiPathPatterns: config.uiPathPatterns || [],
       learningsPath: path
         .join('.olympus', 'state', 'runs', safeId, 'learnings.md')
         .replace(/\\/g, '/'),
@@ -135,6 +136,19 @@ if (cmd === 'init') {
   }
   manifest.steps[name] = rec;
   saveAndPrint(manifest, manifestPath);
+} else if (cmd === 'learn') {
+  // Append a distilled entry to the run's learnings file (used by triage
+  // routes and budget breaches; dev agents append directly themselves).
+  const text = args[0];
+  if (!text) die('usage: olympus-state learn "<entry text>"');
+  const { manifest } = loadActiveManifest();
+  const learningsPath = path.isAbsolute(manifest.learningsPath)
+    ? manifest.learningsPath
+    : path.join(cwd, manifest.learningsPath);
+  fs.mkdirSync(path.dirname(learningsPath), { recursive: true });
+  const stamp = new Date().toISOString();
+  fs.appendFileSync(learningsPath, `\n## ${stamp} (harness-recorded)\n\n${text}\n`);
+  process.stdout.write(JSON.stringify({ ok: true, appended: true, file: manifest.learningsPath }));
 } else if (cmd === 'commit') {
   // Commit accumulated .olympus/ state at a seam moment (freeze, pre-PR).
   const { execSync } = require('child_process');

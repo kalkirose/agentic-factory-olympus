@@ -40,6 +40,13 @@ if (cmd === 'create') {
 } else if (cmd === 'current') {
   const head = git('rev-parse --abbrev-ref HEAD', cwd);
   printAndExit({ ok: head.ok, branch: head.tail.trim() });
+} else if (cmd === 'difffiles') {
+  // Changed files vs a base SHA — feeds conditional gates (UI paths etc.).
+  const from = argOf('--from');
+  if (!from) printAndExit({ ok: false, error: 'usage: difffiles --from <sha>' }, 1);
+  const r = git(`diff --name-only ${from} HEAD`, cwd);
+  if (!r.ok) printAndExit({ ok: false, error: r.tail }, 1);
+  printAndExit({ ok: true, files: r.tail.trim() ? r.tail.trim().split(/\r?\n/) : [] });
 } else {
   printAndExit({ ok: false, error: `unknown command: ${cmd || '(none)'} — expected create|checkout|delete|current` }, 1);
 }

@@ -29,6 +29,8 @@
     "EPERM: operation not permitted, rename.*(Temp|tmp)"
   ],
 
+  "uiPathPatterns": ["^apps/web/src/(routes|components)/"],
+
   "hooks": {
     "formatOnEditCommand": "npx prettier --write {file}"
   },

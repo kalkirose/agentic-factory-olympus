@@ -29,6 +29,11 @@ Every workflow returns `{ status, seam, escalations, ... }`.
   verbatim, say which seam raised them, and wait for the user's decision.
   After the user resolves them, re-launch the SAME workflow — run state is
   re-entrant and resumes at the first incomplete step.
+- `status: "route"` → a triage route was executed (Kronos counts it).
+  Report the route in one line, then follow the return's `instruction`
+  field: `route: "lachesis"` re-runs olympus:lachesis then olympus:atropos;
+  `route: "atropos"` re-runs olympus:atropos. Never execute a route the
+  return did not name.
 
 ## Reporting protocol (quiet, event-driven)
 
