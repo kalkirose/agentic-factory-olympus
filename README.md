@@ -43,8 +43,9 @@ a plugin version — upgrades are explicit, never silent.
 | `agents/` | Agent definitions (system prompts + model pins) |
 | `workflows/` | The three Fates, as named workflows (`olympus:clotho`, …) |
 | `hooks/` | Mechanical enforcement scripts (frozen-test write denial, format/lint, context-budget backstop) |
+| `bin/` | Deterministic run mechanics: state, verdict, freeze, red-state, branch plumbing — no LLM anywhere in them |
 | `skills/` | `hermes` — the conversational entry point |
-| `config/` | Config schema + a generic example |
+| `config/` | Config field reference + a generic example |
 
 ## The cast
 
@@ -62,6 +63,7 @@ prompts, manifests, and reports.
 | Mentor | between-pass | reads learnings; continue or abort with a route |
 | Minos | judge | picks the winner among green branches |
 | Hebe | pr | writes a clean PR, watches the merge checks |
+| Talos | executor | invokes the deterministic `bin/` scripts and relays their JSON verbatim; judges nothing |
 
 Phase B adds: Dolos (adversary), the Furies (official LLM gates), Cyclopes
 (advisory gates), Hecate (triage), Mnemosyne (eval), Prometheus (init),

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+
+  "nextUnitQuery": {
+    "kind": "sprint-file",
+    "path": "docs/sprint-plan.md",
+    "rule": "the first story whose status is ready-for-dev, in file order"
+  },
+  "readinessChecklist": [
+    "spec file exists and lists acceptance criteria with IDs",
+    "all stories this unit depends on are done",
+    "referenced design docs exist at their stated paths"
+  ],
+
+  "commands": {
+    "fullSuite": [
+      { "name": "unit", "command": "npm test" },
+      { "name": "integration", "command": "npm run test:integration" }
+    ],
+    "typecheck": "npm run typecheck",
+    "targetedHint": "npm test -- <path>  (single file while iterating)"
+  },
+
+  "budget": {
+    "maxTranscriptBytes": 8000000
+  },
+
+  "hooks": {
+    "formatOnEditCommand": "npx prettier --write {file}"
+  },
+
+  "conventions": {
+    "branchTemplate": "story/{unit}",
+    "prTargetBranch": "main",
+    "prTitlePrefix": "[{unit}] "
+  },
+
+  "docPaths": {
+    "conventions": "AGENTS.md",
+    "adrs": "docs/adr/",
+    "architecture": "docs/architecture.md",
+    "glossary": null
+  }
+}
