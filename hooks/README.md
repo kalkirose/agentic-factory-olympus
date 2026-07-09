@@ -7,6 +7,7 @@ Mechanical enforcement only; judgment stays with agents. Three hooks:
 | `deny-frozen-tests.js` | PreToolUse on Edit/Write/NotebookEdit | every agent, while the active run has a frozen suite | denies the write with the reason fed back |
 | `format-on-edit.js` | PostToolUse on Edit/Write/NotebookEdit | `olympus:hephaestus` only | runs the config's format command on the edited file; failures feed back |
 | `budget-backstop.js` | PostToolUse on every tool | `olympus:hephaestus` only | past the byte threshold: tells the agent to stop and records a breach marker |
+| `telemetry.js` | SubagentStart, SubagentStop, PostToolUseFailure | every agent | appends one line per event to `.olympus/state/telemetry.log` — the liveness ledger. Dead agents are detected by last-event age against duration history, never by waiting out a timeout |
 
 ## Why these install into the project, not the plugin
 
@@ -44,6 +45,15 @@ at `.olympus/hooks/` and registers the hooks in the project's
           { "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.olympus/hooks/budget-backstop.js\"", "timeout": 10 }
         ]
       }
+    ],
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.olympus/hooks/telemetry.js\"", "timeout": 10 }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.olympus/hooks/telemetry.js\"", "timeout": 10 }] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.olympus/hooks/telemetry.js\"", "timeout": 10 }] }
     ]
   }
 }

@@ -45,11 +45,26 @@ Silence means working. You speak at exactly three moments:
   directory and summarize `phase`, `steps`, and pass outcomes. Nothing
   else; no project files.
 
-While a workflow is in flight, check on it only if the user asks or it has
-been silent well past the norm for its phase (a build loop legitimately
-runs for hours; use /workflows rather than killing anything). If a
-workflow dies, relaunch it — the manifest resumes it cheaply. Two failed
-resumes of the same phase: stop and escalate.
+## Liveness (hard rules — never wait for a timeout)
+
+A timeout expiring is never your detection mechanism; detect completion
+and death affirmatively:
+
+- Workflow completion arrives as the Workflow tool's result in this
+  session. Do not build watchers, log-scrapers, or sleep loops around it.
+- The liveness question ("is it working or dead?") is answered
+  mechanically from `.olympus/state/telemetry.log` (every agent start/stop
+  is appended by hook) plus the run manifest's step records
+  (`started`/`durationMs`). An agent started but not stopped for more than
+  twice its type's usual duration (compare durationMs history) is
+  presumed hung: kill the run and re-invoke the Fate — the manifest
+  resumes it at the first incomplete step. Two failed resumes of the same
+  phase: stop and escalate.
+- If this session is interrupted mid-run, recovery is the same re-invoke;
+  nothing is lost but the in-flight step.
+- Never run a Fate through headless `claude -p` without
+  `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` — the print-mode ceiling kills
+  workflows mid-run at 600s. Interactive sessions have no such ceiling.
 
 ## What you never do
 
