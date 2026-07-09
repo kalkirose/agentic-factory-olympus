@@ -21,9 +21,12 @@ prior passes, never their code.
 
 ## Status
 
-Phase A: walking skeleton. Core verdict gates only (frozen suite,
-test-integrity diff, typecheck). The full gate set, test-authoring
-tournament, triage routes, and telemetry land in Phase B.
+Phase B in build. The skeleton (Phase A) is validated end-to-end; the
+organs are authored: the six Furies (official LLM gate agents) with a
+verification pass, the config-gated test tournament (adversary kill
+rates, suite judge, bounded refinement), triage routes with a
+route-execution cap, and the lifecycle telemetry ledger. Deterministic
+Tier-1 gates extend per project via `commands.gates`.
 
 ## Install
 
@@ -64,7 +67,14 @@ prompts, manifests, and reports.
 | Minos | judge | picks the winner among green branches |
 | Hebe | pr | writes a clean PR, watches the merge checks |
 | Talos | executor | invokes the deterministic `bin/` scripts and relays their JSON verbatim; judges nothing |
+| Dolos | adversary | writes plausible wrong implementations so a suite's kill rate is measurable pre-implementation |
+| The Furies | gates | six official diff-only gate agents (spec, architecture, minimality, security, operational, interface) + a verification pass; only confirmed HIGH findings block |
+| Hecate | triage | classifies failed PR checks into five evidence-carrying routes |
+| Mnemosyne | eval | out-of-band eval review: escape attribution, proposals needing sign-off |
+| Prometheus | init | scan-first project onboarding (`/olympus:prometheus`) |
+| Atlas | arch review | out-of-band whole-repo drift/erosion review; proposals, never blocks |
 
-Phase B adds: Dolos (adversary), the Furies (official LLM gates), Cyclopes
-(advisory gates), Hecate (triage), Mnemosyne (eval), Prometheus (init),
-Atlas (architecture review), Nyx (liveness), Kronos (time governance).
+Roles carried by mechanism rather than an agent: Nyx (liveness) is the
+telemetry ledger + duration records; Kronos (time governance) is the loop
+caps, the budget backstop, and the triage route cap; the Cyclopes
+(advisory checks) are the dev agent's own test/gate runs mid-pass.
