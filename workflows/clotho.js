@@ -166,59 +166,215 @@ const ARGUS_SCHEMA = {
   required: ['verdict', 'findings'],
 }
 
-let suite = steps['test-author'] && steps['test-author'].status === 'done' ? steps['test-author'].result : null
-let frozen = manifest.frozenTests
+const DOLOS_SCHEMA = {
+  type: 'object',
+  properties: {
+    implementations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          faultClass: { type: 'string' },
+          clause: { type: 'string' },
+          expectedKiller: { type: 'string' },
+        },
+        required: ['id', 'faultClass', 'clause', 'expectedKiller'],
+      },
+    },
+  },
+  required: ['implementations'],
+}
+const TEST_MINOS_SCHEMA = {
+  type: 'object',
+  properties: {
+    scores: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string' },
+          total: { type: 'number' },
+          evidence: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['branch', 'total', 'evidence'],
+      },
+    },
+    winner: { type: 'string' },
+    rationale: { type: 'string' },
+  },
+  required: ['scores', 'winner', 'rationale'],
+}
 
-if (!frozen) {
+// Author one suite on the current branch; validate; return the candidate
+// record or an escalation-shaped error. One Argus repair round included.
+async function authorAndValidate(passLabel, extraPrompt) {
+  let suite = null
   let argusFindings = null
-  for (let round = 1; round <= 2 && !frozen; round++) {
-    if (!suite || argusFindings) {
-      await talos('olympus-state step test-author started', 'talos:step', 'Tests')
-      suite = await agent(
-        `Author the acceptance suite for unit ${iris.unitId} from the validated spec at "${iris.specPath}".\n` +
-          `Cassandra's findings file: "${(cassandra && cassandra.findingsPath) || (steps['spec-validation'] && steps['spec-validation'].findingsPath) || 'none'}" — read the NOTEs.\n` +
-          `Test commands and conventions: .olympus/config.json (commands, docPaths.conventions).\n` +
-          `Write the traceability matrix to "${matrixPath}".\n` +
-          (argusFindings
-            ? `REPAIR ROUND: the validator blocked the previous suite. Fix exactly these findings:\n${argusFindings}\n`
-            : '') +
-          `Work on the current branch (${baseBranch}). Do not commit; the freeze step commits.`,
-        { agentType: 'olympus:daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:author-r${round}`, phase: 'Tests', effort: 'xhigh' }
-      )
-      if (!suite) throw new Error('Daedalus (tests) returned nothing')
-    }
+  for (let round = 1; round <= 2; round++) {
+    await talos('olympus-state step test-author started', 'talos:step', 'Tests')
+    suite = await agent(
+      `Author the acceptance suite for unit ${iris.unitId} from the validated spec at "${iris.specPath}".\n` +
+        `Cassandra's findings file: "${(cassandra && cassandra.findingsPath) || (steps['spec-validation'] && steps['spec-validation'].findingsPath) || 'none'}" — read the NOTEs.\n` +
+        `Test commands and conventions: .olympus/config.json (commands, docPaths.conventions).\n` +
+        `Write the traceability matrix to "${matrixPath}".\n` +
+        (extraPrompt || '') +
+        (argusFindings ? `REPAIR ROUND: the validator blocked the previous suite. Fix exactly these findings:\n${argusFindings}\n` : '') +
+        `Append a distilled learnings entry to "${manifest.learningsPath}" when you are done (test-authoring discipline: what constrained well, what was hard to express, spec gaps).\n` +
+        `Do not commit; the harness owns commits.`,
+      { agentType: 'olympus:daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
+    )
+    if (!suite) throw new Error('Daedalus (tests) returned nothing')
 
     const red = await talos('olympus-redstate', 'talos:redstate', 'Tests')
-    if (!red.ok) return escalate('clotho:environment', [`red-state run failed to execute: ${red.errorTail || JSON.stringify(red.output)}`])
+    if (!red.ok) return { error: escalate('clotho:environment', [`red-state run failed to execute: ${red.errorTail || JSON.stringify(red.output)}`]) }
 
     const argus = await agent(
       `Validate the authored suite for unit ${iris.unitId}.\n` +
         `Spec: "${iris.specPath}". Matrix: "${suite.matrixPath}". Test files: ${suite.testFiles.join(', ')}.\n` +
         `Red-state run results (raw):\n${JSON.stringify(red.output.results || red.output)}\n` +
         `Run every check from your definition.`,
-      { agentType: 'olympus:argus', schema: ARGUS_SCHEMA, label: `argus:validate-r${round}`, phase: 'Tests', effort: 'xhigh' }
+      { agentType: 'olympus:argus', schema: ARGUS_SCHEMA, label: `argus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
     )
     if (!argus) throw new Error('Argus (validator) returned nothing')
-
     const blockers = argus.findings.filter((f) => f.severity === 'BLOCKER')
     if (argus.verdict === 'pass' && blockers.length === 0) {
       await talos(`olympus-state step test-author done ${esc({ files: suite.testFiles.length, matrix: suite.matrixPath })}`, 'talos:step', 'Tests')
-      phase('Freeze')
-      const freezePaths = suite.testFiles.concat([suite.matrixPath]).join(',')
-      const fr = await talos(`olympus-freeze --paths "${freezePaths}"`, 'talos:freeze', 'Freeze')
-      if (!fr.ok) return escalate('clotho:state', [`freeze failed: ${fr.errorTail || JSON.stringify(fr.output)}`])
-      frozen = fr.output.frozenTests
-      await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha })}`, 'talos:step', 'Freeze')
-    } else if (round === 2) {
-      return escalate(
-        'clotho:tests',
-        blockers.map((f) => `BLOCKER: ${f.summary} (${f.evidence})`),
-        { unit: iris.unitId, note: 'suite still blocked after one repair round' }
-      )
-    } else {
-      argusFindings = blockers.map((f) => `- ${f.summary} (${f.evidence})`).join('\n')
-      log(`Argus blocked the suite (${blockers.length} findings); one repair round`)
+      return { suite, notes: argus.findings.filter((f) => f.severity === 'NOTE').length }
     }
+    if (round === 2) {
+      return {
+        error: escalate('clotho:tests', blockers.map((f) => `BLOCKER: ${f.summary} (${f.evidence})`), {
+          unit: iris.unitId,
+          note: 'suite still blocked after one repair round',
+        }),
+      }
+    }
+    argusFindings = blockers.map((f) => `- ${f.summary} (${f.evidence})`).join('\n')
+    log(`Argus blocked the suite (${blockers.length} findings); one repair round`)
+  }
+  return { error: escalate('clotho:tests', ['unreachable'], {}) }
+}
+
+async function killSweep(suite, label) {
+  if (!tr.adversaryCount || !tr.killRateCommand) return null
+  const cmd = tr.killRateCommand.split('{tests}').join(suite.testFiles.map((f) => `"${f}"`).join(' '))
+  const sweep = await talos(`olympus-adversary sweep --dir "${adversaryDir}" --command ${esc(cmd)}`, `talos:sweep-${label}`, 'Tests')
+  if (!sweep.ok) {
+    log(`kill sweep failed for ${label}: ${sweep.errorTail || JSON.stringify(sweep.output)}`)
+    return null
+  }
+  return sweep.output
+}
+
+let frozen = manifest.frozenTests
+const tr = manifest.testRalph || { passes: 1, adversaryCount: 0, refinementRounds: 0 }
+const adversaryDir = `${runDir}/adversary`
+
+if (!frozen) {
+  // Adversary set: generated once, reused across every candidate suite.
+  if (tr.adversaryCount > 0 && !(steps['adversary'] && steps['adversary'].status === 'done')) {
+    const dolos = await agent(
+      `Write ${tr.adversaryCount} plausible WRONG implementations for unit ${iris.unitId}.\n` +
+        `Spec (your only oracle): "${iris.specPath}". Write each implementation under "${adversaryDir}/<id>/" ` +
+        `mirroring repo-relative paths (e.g. ${adversaryDir}/w1/src/module.ts). Follow your definition: one deliberate ` +
+        `spec-violating fault each, diverse fault classes, otherwise complete and plausible.`,
+      { agentType: 'olympus:dolos', schema: DOLOS_SCHEMA, label: 'dolos:adversary', phase: 'Tests', effort: 'xhigh' }
+    )
+    if (!dolos) throw new Error('Dolos (adversary) returned nothing')
+    await talos(`olympus-state step adversary done ${esc({ count: dolos.implementations.length, manifest: dolos.implementations })}`, 'talos:step', 'Tests')
+  }
+
+  if (tr.passes <= 1) {
+    // Single-pass shape (the Phase-A skeleton, still config-reachable).
+    const r = await authorAndValidate('author', `Work on the current branch (${baseBranch}).\n`)
+    if (r.error) return r.error
+    const sweep = await killSweep(r.suite, 'single')
+    if (sweep) await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep.killRate, survivors: sweep.survivors } })}`, 'talos:kill-record', 'Tests')
+    phase('Freeze')
+    const fr = await talos(`olympus-freeze --paths "${r.suite.testFiles.concat([r.suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')
+    if (!fr.ok) return escalate('clotho:state', [`freeze failed: ${fr.errorTail || JSON.stringify(fr.output)}`])
+    frozen = fr.output.frozenTests
+    await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha })}`, 'talos:step', 'Freeze')
+  } else {
+    // Test tournament: P candidate suites on branches, judged, refined, frozen.
+    const candidates = []
+    for (let t = 1; t <= tr.passes; t++) {
+      const tBranch = `${baseBranch}-tests-${t}`
+      const br = await talos(`olympus-branch create --name "${tBranch}" --from "${baseBranch}"`, `talos:tbranch-${t}`, 'Tests')
+      if (!br.ok) return escalate('clotho:state', [`test branch create failed: ${br.errorTail || JSON.stringify(br.output)}`])
+      const r = await authorAndValidate(`t${t}`, `You are test pass ${t} of ${tr.passes}. Read the learnings file first — prior passes' entries steer you.\nWork on the current branch (${tBranch}).\n`)
+      if (r.error) return r.error
+      // Candidate suites are committed on their branch so the sweep and the
+      // judge see a fixed artifact (adversary sweep requires a clean tree).
+      await talos(`olympus-freeze --paths "${r.suite.testFiles.concat([r.suite.matrixPath]).join(',')}"`, `talos:tcommit-${t}`, 'Tests')
+      const sweep = await killSweep(r.suite, `t${t}`)
+      candidates.push({
+        branch: tBranch,
+        suite: r.suite,
+        argusNotes: r.notes,
+        killRate: sweep ? sweep.killRate : 'unmeasured',
+        survivors: sweep ? sweep.survivors : [],
+      })
+      log(`Test pass ${t}: ${r.suite.testFiles.length} files, kill rate ${sweep ? sweep.killRate : 'unmeasured'}`)
+    }
+
+    const judge = await agent(
+      `Judge the candidate TEST SUITES for unit ${iris.unitId} — individual, fact-anchored scoring; never side-by-side. ` +
+        `Spec: "${iris.specPath}".\n` +
+        `Candidates (score strictly one at a time, in this order):\n` +
+        candidates.map((c) => `- ${c.branch}: files ${c.suite.testFiles.join(', ')}; matrix ${c.suite.matrixPath}; adversary kill rate ${c.killRate} (survivors: ${c.survivors.join(', ') || 'none'}); validator notes ${c.argusNotes}`).join('\n') +
+        `\nRubric (fact-anchored, per your isolation protocol): traceability completeness both directions (count gaps from the matrix); ` +
+        `adversary kill rate (given above — higher is better); compound-condition depth; smell absence; red-state validity. ` +
+        `Do NOT score line coverage or executability. Read each branch in isolation (git diff ${'`'}${baseBranch}${'`'}..<branch>). Tie goes to the later pass.`,
+      { agentType: 'olympus:minos', schema: TEST_MINOS_SCHEMA, label: 'minos:test-judge', phase: 'Tests', effort: 'xhigh' }
+    )
+    if (!judge || !candidates.some((c) => c.branch === judge.winner)) {
+      return escalate('clotho:test-judge', ['test judge failed to return a valid pick'], { candidates: candidates.map((c) => c.branch) })
+    }
+    const winner = candidates.find((c) => c.branch === judge.winner)
+    log(`Test judge picked ${winner.branch}: ${judge.rationale.slice(0, 160)}`)
+
+    // The story branch adopts the winning suite; losing branches vanish.
+    const adopt = await talos(`olympus-branch create --name "${baseBranch}" --from "${winner.branch}"`, 'talos:adopt', 'Tests')
+    if (!adopt.ok) return escalate('clotho:state', [`could not adopt winning suite: ${adopt.errorTail || JSON.stringify(adopt.output)}`])
+    for (const c of candidates) {
+      if (c.branch !== winner.branch) await talos(`olympus-branch delete --name "${c.branch}"`, 'talos:tprune', 'Tests')
+    }
+    await talos(`olympus-branch delete --name "${winner.branch}"`, 'talos:tprune-winner', 'Tests')
+
+    // Bounded refinement against exactly the wrong implementations the
+    // winner failed to kill, then freeze.
+    let survivors = winner.survivors
+    let suite = winner.suite
+    for (let round = 1; round <= (tr.refinementRounds || 0) && survivors.length; round++) {
+      log(`Refinement round ${round}: strengthening against survivors ${survivors.join(', ')}`)
+      const refined = await agent(
+        `REFINEMENT ROUND ${round} for the winning suite of unit ${iris.unitId} (files: ${suite.testFiles.join(', ')}).\n` +
+          `These adversary implementations under "${adversaryDir}" SURVIVED the suite: ${survivors.join(', ')}. ` +
+          `Read each survivor's fault (their manifest entries are in the run manifest step "adversary"), and strengthen the suite ` +
+          `to kill exactly those faults — from the SPEC's language, not from the wrong code's shape. Update the matrix. ` +
+          `Spec: "${iris.specPath}". Do not weaken or remove existing tests. Do not commit.`,
+        { agentType: 'olympus:daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:refine-${round}`, phase: 'Tests', effort: 'xhigh' }
+      )
+      if (!refined) break
+      suite = refined
+      await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, `talos:refreeze-${round}`, 'Tests')
+      const sweep = await killSweep(suite, `refine-${round}`)
+      survivors = sweep ? sweep.survivors : []
+      await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep ? sweep.killRate : 'unmeasured', survivors } })}`, 'talos:kill-record', 'Tests')
+    }
+
+    phase('Freeze')
+    const fr = await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')
+    if (!fr.ok) return escalate('clotho:state', [`freeze failed: ${fr.errorTail || JSON.stringify(fr.output)}`])
+    frozen = fr.output.frozenTests
+    await talos(
+      `olympus-state merge ${esc({ testJudge: { winner: judge.winner, rationale: judge.rationale, scores: judge.scores } })}`,
+      'talos:test-judge-record', 'Freeze'
+    )
+    await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha, survivorsAtFreeze: survivors })}`, 'talos:step', 'Freeze')
+    if (survivors.length) log(`Frozen with ${survivors.length} surviving adversary implementation(s) — recorded for the eval ledger`)
   }
 }
 

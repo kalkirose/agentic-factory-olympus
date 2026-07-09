@@ -77,6 +77,7 @@ if (cmd === 'init') {
       docPaths: config.docPaths || {},
       infraFlakeSignatures: config.infraFlakeSignatures || [],
       uiPathPatterns: config.uiPathPatterns || [],
+      testRalph: config.testRalph || null,
       learningsPath: path
         .join('.olympus', 'state', 'runs', safeId, 'learnings.md')
         .replace(/\\/g, '/'),

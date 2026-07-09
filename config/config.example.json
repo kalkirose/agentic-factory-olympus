@@ -31,6 +31,13 @@
 
   "uiPathPatterns": ["^apps/web/src/(routes|components)/"],
 
+  "testRalph": {
+    "passes": 3,
+    "adversaryCount": 5,
+    "refinementRounds": 2,
+    "killRateCommand": "npm test -- {tests}"
+  },
+
   "hooks": {
     "formatOnEditCommand": "npx prettier --write {file}"
   },

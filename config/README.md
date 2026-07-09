@@ -30,6 +30,9 @@ Prometheus writes the file.
 | `commands.targetedHint` | Hephaestus (dev) | How to run a narrow slice while iterating; advisory only. |
 | `budget.maxTranscriptBytes` | budget-backstop hook | Per-pass context ceiling; a breach ends the pass as failed. |
 | `infraFlakeSignatures` | verdict + red-state scripts | Regexes for known *infrastructure* failures (never test assertions). A failing layer whose output matches retries once; the retry is flagged in the verdict JSON, never silent. |
+| `uiPathPatterns` | Lachesis (build) | Regexes over changed files; a match makes the interface gate agent run for that pass. |
+| `testRalph` | Clotho (spec + tests) | Omit for a single authoring pass. With it: `passes` candidate suites on branches, `adversaryCount` Dolos wrong implementations measured via `killRateCommand` (`{tests}` substituted with the suite's files), a fact-anchored judge, then `refinementRounds` against surviving faults before the freeze. |
+| `commands.gates` | verdict script | Additional deterministic Tier-1 gates `[{name, command}]` run after typecheck — prohibited patterns, token conformance, duplication, dependency rules, mutation. |
 | `hooks.formatOnEditCommand` | format-on-edit hook | Run after every dev edit; `{file}` is replaced with the edited path. Omit to disable. |
 | `conventions` | branch/freeze scripts, Hebe (pr) | Branch naming (`{unit}` substituted), PR target, title prefix. |
 | `docPaths` | Cassandra (spec), Daedalus (tests), Hephaestus (dev) | Pointers, not dumps: agents retrieve these on demand. |
