@@ -119,7 +119,20 @@ if (cmd === 'init') {
       die(`step detail is not valid JSON: ${e.message}`);
     }
   }
-  manifest.steps[name] = { status, at: new Date().toISOString(), ...detail };
+  const at = new Date().toISOString();
+  const rec = { status, at, ...detail };
+  // A "started" -> terminal transition preserves the start and yields a
+  // duration, so run timing is auditable per step.
+  const existing = manifest.steps[name];
+  if (existing && status !== 'started') {
+    const startedAt = existing.status === 'started' ? existing.at : existing.startedAt;
+    if (startedAt) {
+      rec.startedAt = startedAt;
+      const d = Date.parse(at) - Date.parse(startedAt);
+      if (!Number.isNaN(d) && d >= 0) rec.durationMs = d;
+    }
+  }
+  manifest.steps[name] = rec;
   saveAndPrint(manifest, manifestPath);
 } else if (cmd === 'commit') {
   // Commit accumulated .olympus/ state at a seam moment (freeze, pre-PR).

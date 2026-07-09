@@ -107,6 +107,7 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
 
   const br = await talos(`olympus-branch create --name "${branch}" --from ${frozen.sha}`, `talos:branch-${n}`, 'Build loop')
   if (!br.ok) return escalate('lachesis:state', [`branch create failed for pass ${n}: ${br.errorTail || JSON.stringify(br.output)}`])
+  await talos(`olympus-state step pass-${n} started`, `talos:step-${n}`, 'Build loop')
 
   let dev = await agent(contextPackage(n), {
     agentType: 'olympus:hephaestus',
@@ -167,6 +168,7 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
     await talos(`olympus-branch delete --name "${branch}"`, `talos:cleanup-${n}`, 'Build loop')
   }
   await talos(`olympus-state merge ${esc({ passes })}`, `talos:record-${n}`, 'Build loop')
+  await talos(`olympus-state step pass-${n} ${outcome} ${esc({ branch })}`, `talos:step-${n}-end`, 'Build loop')
   log(`Pass ${n}: ${outcome} (${greens}/${GREENS_TARGET} green, ${passes.length}/${MAX_PASSES} passes)`)
 
   if (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
@@ -190,6 +192,7 @@ if (greens === 0) {
 
 // -------------------------------------------------------------------- Judge
 phase('Judge')
+await talos('olympus-state step judge started', 'talos:step-judge', 'Judge')
 const greenBranches = passes.filter((p) => p.outcome === 'green').map((p) => p.branch)
 const MINOS_SCHEMA = {
   type: 'object',
@@ -234,6 +237,7 @@ await talos(
   `olympus-state merge ${esc({ judge: { winner: minos.winner, scores: minos.scores, rationale: minos.rationale }, phase: 'atropos' })}`,
   'talos:judge-record', 'Judge'
 )
+await talos(`olympus-state step judge done ${esc({ winner: minos.winner })}`, 'talos:step-judge-end', 'Judge')
 
 return {
   status: 'done',

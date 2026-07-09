@@ -43,15 +43,28 @@ function normalize(p) {
 }
 
 // True when target (absolute or cwd-relative) is one of the frozen paths
-// or sits under a frozen directory.
+// or sits under a frozen directory. Frozen entries may themselves be
+// absolute (older manifests) — relativize both sides before comparing.
 function isFrozenPath(target, frozenPaths, cwd) {
   if (!target || !Array.isArray(frozenPaths)) return false;
-  const abs = path.isAbsolute(target) ? target : path.join(cwd, target);
-  const rel = normalize(path.relative(cwd, abs));
+  const toRel = (p) =>
+    normalize(path.isAbsolute(p) ? path.relative(cwd, p) : p);
+  const rel = toRel(target);
   return frozenPaths.some((f) => {
-    const fn = normalize(f);
+    const fn = toRel(f);
     return rel === fn || rel.startsWith(fn + '/');
   });
 }
 
-module.exports = { readStdin, loadManifest, isFrozenPath };
+// Best-effort audit line so hook firing is observable (and debuggable).
+function trace(cwd, entry) {
+  try {
+    const p = path.join(cwd, '.olympus', 'state', 'hook-trace.log');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n');
+  } catch (e) {
+    // Tracing must never break the hook.
+  }
+}
+
+module.exports = { readStdin, loadManifest, isFrozenPath, trace };

@@ -112,6 +112,7 @@ const CASSANDRA_SCHEMA = {
 let cassandra = null
 if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
   const findingsPath = `.olympus/state/runs/${iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-')}/spec-findings.md`
+  await talos('olympus-state step spec-validation started', 'talos:step', 'Spec')
   cassandra = await agent(
     `Validate the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}).\n` +
       `Doc pointers live in .olympus/config.json under docPaths — retrieve on demand.\n` +
@@ -172,6 +173,7 @@ if (!frozen) {
   let argusFindings = null
   for (let round = 1; round <= 2 && !frozen; round++) {
     if (!suite || argusFindings) {
+      await talos('olympus-state step test-author started', 'talos:step', 'Tests')
       suite = await agent(
         `Author the acceptance suite for unit ${iris.unitId} from the validated spec at "${iris.specPath}".\n` +
           `Cassandra's findings file: "${(cassandra && cassandra.findingsPath) || (steps['spec-validation'] && steps['spec-validation'].findingsPath) || 'none'}" — read the NOTEs.\n` +

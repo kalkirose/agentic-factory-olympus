@@ -3,7 +3,7 @@
 // agent. Defense in depth only — the workflow's frozen-SHA diff check
 // remains the authoritative verdict. Fails open when no run state exists.
 'use strict';
-const { readStdin, loadManifest, isFrozenPath } = require('./lib');
+const { readStdin, loadManifest, isFrozenPath, trace } = require('./lib');
 
 readStdin((p) => {
   const cwd = p.cwd || process.cwd();
@@ -11,8 +11,10 @@ readStdin((p) => {
   const frozen = manifest && manifest.frozenTests && manifest.frozenTests.paths;
   const input = p.tool_input || {};
   const target = input.file_path || input.notebook_path;
+  const deny = Boolean(frozen && isFrozenPath(target, frozen, cwd));
+  trace(cwd, { hook: 'deny-frozen-tests', tool: p.tool_name, agent: p.agent_type || 'main', target, frozenLoaded: Boolean(frozen), decision: deny ? 'deny' : 'allow' });
 
-  if (frozen && isFrozenPath(target, frozen, cwd)) {
+  if (deny) {
     process.stdout.write(
       JSON.stringify({
         hookSpecificOutput: {
