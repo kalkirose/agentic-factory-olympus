@@ -34,6 +34,18 @@ signal; green runs prove nothing about the gates.
   version, and plugin version — without those, "the rubric helped" and
   "the model changed" are indistinguishable.
 
+## The two ledgers
+
+- **Run ledger** — per project, already collected mechanically:
+  `.olympus/state/runs/*/manifest.json` (steps, durations, verdicts,
+  judge scores, triage routes) + `telemetry.log` + `hook-trace.log`.
+- **Agent-type ledger** — harness-level, cross-project:
+  `~/.claude/olympus/agent-type-ledger.jsonl`. You append one entry per
+  reviewed run per agent type: `{ts, project, unit, agentType, model,
+  effort, definitionVersion, pluginVersion, measurements, escapes}`.
+  Learnings about agent TYPES carry across projects; raw run facts stay
+  in the project. Create the directory on first write.
+
 ## What you produce
 
 1. **Proposals** — system-message, rubric, or threshold changes, each
