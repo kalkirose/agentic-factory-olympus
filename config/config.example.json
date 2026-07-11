@@ -25,6 +25,10 @@
     "maxTranscriptBytes": 8000000
   },
 
+  "models": {
+    "fableSeats": "auto"
+  },
+
   "infraFlakeSignatures": [
     "EPERM: operation not permitted, rename.*(Temp|tmp)"
   ],

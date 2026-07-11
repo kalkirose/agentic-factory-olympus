@@ -48,12 +48,32 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
   }
 }
 
+// ---- Fable-seat dispatch: Minos runs claude-fable-5 by definition; when
+// that dispatch dies the -opus variant (same role, Opus-tuned prompt) takes
+// the seat, logged and recorded. Config models.fableSeats: 'auto' (default)
+// | 'opus' (variants directly) | 'fable' (never fall back).
+let fableSeatPref = 'auto'
+async function seatAgent(seat, prompt, opts) {
+  if (fableSeatPref !== 'opus') {
+    const r = await agent(prompt, { ...opts, agentType: `olympus:${seat}` })
+    if (r) return r
+    if (fableSeatPref === 'fable') throw new Error(`${seat} (fable seat) returned nothing and fallback is disabled (models.fableSeats: 'fable')`)
+    log(`${seat}: fable dispatch returned nothing — falling back to ${seat}-opus`)
+    await talosSoft(
+      `olympus-state learn ${esc(`Fable seat '${seat}' fell back to '${seat}-opus' (dispatch returned nothing — model unavailable or terminal error). Ledger comparisons for this run must account for the seat model change.`)}`,
+      'talos:seat-fallback', opts.phase
+    )
+  }
+  return agent(prompt, { ...opts, agentType: `olympus:${seat}-opus`, label: `${(opts && opts.label) || seat}-opus` })
+}
+
 // ------------------------------------------------------------------- Set up
 phase('Build loop')
 await talos('olympus-state resync', 'talos:resync', 'Build loop')
 const state = await talos('olympus-state get', 'talos:state', 'Build loop')
 if (!state.ok) return escalate('lachesis:state', [`no active run: ${state.errorTail || JSON.stringify(state.output)}`])
 const manifest = state.output.manifest
+fableSeatPref = (manifest.models && manifest.models.fableSeats) || 'auto'
 const frozen = manifest.frozenTests
 if (!frozen || !frozen.sha) return escalate('lachesis:state', ['no frozen suite — run olympus:clotho first'])
 
@@ -347,12 +367,12 @@ const MINOS_SCHEMA = {
   },
   required: ['scores', 'winner', 'rationale'],
 }
-const minos = await agent(
+const minos = await seatAgent('minos',
   `Judge the green candidates for unit ${unitId}. Spec: "${manifest.spec.path}". ` +
     `Frozen base SHA: ${frozen.sha}. Candidates (in pass order — score strictly one at a time, in this order): ${greenBranches.join(', ')}.\n` +
     `Read each candidate's diff with: git diff ${frozen.sha}..<branch>. Follow the isolation protocol and rubric in your definition. ` +
     `Tie goes to the later pass.`,
-  { agentType: 'olympus:minos', schema: MINOS_SCHEMA, label: 'minos:judge', phase: 'Judge', effort: 'xhigh' }
+  { schema: MINOS_SCHEMA, label: 'minos:judge', phase: 'Judge', effort: 'xhigh' }
 )
 if (!minos || !greenBranches.includes(minos.winner)) {
   return escalate('lachesis:judge', ['Minos (judge) failed to return a valid pick'], { candidates: greenBranches })

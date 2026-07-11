@@ -49,6 +49,27 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
   }
 }
 
+// ---- Fable-seat dispatch: the judgment seats (cassandra, daedalus, minos)
+// run claude-fable-5 by definition. When that dispatch dies (model
+// unavailable, terminal API error) the -opus variant — same role, prompt
+// re-tuned for Opus 4.8 — takes the seat, logged and recorded in learnings.
+// Config models.fableSeats: 'auto' (default: try fable, fall back) |
+// 'opus' (dispatch variants directly) | 'fable' (never fall back).
+let fableSeatPref = 'auto'
+async function seatAgent(seat, prompt, opts) {
+  if (fableSeatPref !== 'opus') {
+    const r = await agent(prompt, { ...opts, agentType: `olympus:${seat}` })
+    if (r) return r
+    if (fableSeatPref === 'fable') throw new Error(`${seat} (fable seat) returned nothing and fallback is disabled (models.fableSeats: 'fable')`)
+    log(`${seat}: fable dispatch returned nothing — falling back to ${seat}-opus`)
+    await talosSoft(
+      `olympus-state learn ${esc(`Fable seat '${seat}' fell back to '${seat}-opus' (dispatch returned nothing — model unavailable or terminal error). Ledger comparisons for this run must account for the seat model change.`)}`,
+      'talos:seat-fallback', opts.phase
+    )
+  }
+  return agent(prompt, { ...opts, agentType: `olympus:${seat}-opus`, label: `${(opts && opts.label) || seat}-opus` })
+}
+
 // ---------------------------------------------------------------- Readiness
 phase('Readiness')
 const requestedUnit = args && args.unitId ? String(args.unitId) : null
@@ -92,6 +113,7 @@ const manifest = refreshed.ok ? refreshed.output.manifest : init.output.manifest
 const conv = manifest.conventions || {}
 const baseBranch = (conv.branchTemplate || 'olympus/{unit}').replace('{unit}', iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-'))
 const steps = manifest.steps || {}
+fableSeatPref = (manifest.models && manifest.models.fableSeats) || 'auto'
 
 if (!steps['branch'] || steps['branch'].status !== 'done') {
   const br = await talos(
@@ -129,11 +151,11 @@ let cassandra = null
 if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
   const findingsPath = `.olympus/state/runs/${iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-')}/spec-findings.md`
   await talos('olympus-state step spec-validation started', 'talos:step', 'Spec')
-  cassandra = await agent(
+  cassandra = await seatAgent('cassandra',
     `Validate the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}).\n` +
       `Doc pointers live in .olympus/config.json under docPaths — retrieve on demand.\n` +
       `Write your findings file to "${findingsPath}". Run all three checks from your definition.`,
-    { agentType: 'olympus:cassandra', schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
+    { schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
   )
   if (!cassandra) throw new Error('Cassandra (spec) returned nothing')
   const hard = cassandra.findings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'REVISION')
@@ -229,7 +251,7 @@ async function authorAndValidate(passLabel, extraPrompt) {
   let argusFindings = null
   for (let round = 1; round <= 2; round++) {
     await talos('olympus-state step test-author started', 'talos:step', 'Tests')
-    suite = await agent(
+    suite = await seatAgent('daedalus',
       `Author the acceptance suite for unit ${iris.unitId} from the validated spec at "${iris.specPath}".\n` +
         `Cassandra's findings file: "${(cassandra && cassandra.findingsPath) || (steps['spec-validation'] && steps['spec-validation'].findingsPath) || 'none'}" — read the NOTEs.\n` +
         `Test commands and conventions: .olympus/config.json (commands, docPaths.conventions).\n` +
@@ -238,7 +260,7 @@ async function authorAndValidate(passLabel, extraPrompt) {
         (argusFindings ? `REPAIR ROUND: the validator blocked the previous suite. Fix exactly these findings:\n${argusFindings}\n` : '') +
         `Append a distilled learnings entry to "${manifest.learningsPath}" when you are done (test-authoring discipline: what constrained well, what was hard to express, spec gaps).\n` +
         `Do not commit; the harness owns commits.`,
-      { agentType: 'olympus:daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
+      { schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
     )
     if (!suite) throw new Error('Daedalus (tests) returned nothing')
 
@@ -335,7 +357,7 @@ if (!frozen) {
       log(`Test pass ${t}: ${r.suite.testFiles.length} files, kill rate ${sweep ? sweep.killRate : 'unmeasured'}`)
     }
 
-    const judge = await agent(
+    const judge = await seatAgent('minos',
       `Judge the candidate TEST SUITES for unit ${iris.unitId} — individual, fact-anchored scoring; never side-by-side. ` +
         `Spec: "${iris.specPath}".\n` +
         `Candidates (score strictly one at a time, in this order):\n` +
@@ -343,7 +365,7 @@ if (!frozen) {
         `\nRubric (fact-anchored, per your isolation protocol): traceability completeness both directions (count gaps from the matrix); ` +
         `adversary kill rate (given above — higher is better); compound-condition depth; smell absence; red-state validity. ` +
         `Do NOT score line coverage or executability. Read each branch in isolation (git diff ${'`'}${baseBranch}${'`'}..<branch>). Tie goes to the later pass.`,
-      { agentType: 'olympus:minos', schema: TEST_MINOS_SCHEMA, label: 'minos:test-judge', phase: 'Tests', effort: 'xhigh' }
+      { schema: TEST_MINOS_SCHEMA, label: 'minos:test-judge', phase: 'Tests', effort: 'xhigh' }
     )
     if (!judge || !candidates.some((c) => c.branch === judge.winner)) {
       return escalate('clotho:test-judge', ['test judge failed to return a valid pick'], { candidates: candidates.map((c) => c.branch) })
@@ -365,13 +387,13 @@ if (!frozen) {
     let suite = winner.suite
     for (let round = 1; round <= (tr.refinementRounds || 0) && survivors.length; round++) {
       log(`Refinement round ${round}: strengthening against survivors ${survivors.join(', ')}`)
-      const refined = await agent(
+      const refined = await seatAgent('daedalus',
         `REFINEMENT ROUND ${round} for the winning suite of unit ${iris.unitId} (files: ${suite.testFiles.join(', ')}).\n` +
           `These adversary implementations under "${adversaryDir}" SURVIVED the suite: ${survivors.join(', ')}. ` +
           `Read each survivor's fault (their manifest entries are in the run manifest step "adversary"), and strengthen the suite ` +
           `to kill exactly those faults — from the SPEC's language, not from the wrong code's shape. Update the matrix. ` +
           `Spec: "${iris.specPath}". Do not weaken or remove existing tests. Do not commit.`,
-        { agentType: 'olympus:daedalus', schema: DAEDALUS_SCHEMA, label: `daedalus:refine-${round}`, phase: 'Tests', effort: 'xhigh' }
+        { schema: DAEDALUS_SCHEMA, label: `daedalus:refine-${round}`, phase: 'Tests', effort: 'xhigh' }
       )
       if (!refined) break
       suite = refined
