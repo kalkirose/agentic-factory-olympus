@@ -37,6 +37,7 @@ function escalate(seam, items, extra) {
 }
 
 phase('Ship')
+await talos('olympus-state resync', 'talos:resync')
 const state = await talos('olympus-state get', 'talos:state')
 if (!state.ok) return escalate('atropos:state', [`no active run: ${state.errorTail || JSON.stringify(state.output)}`])
 const manifest = state.output.manifest
@@ -88,7 +89,10 @@ const hebe = await agent(
     `judge rationale: ${manifest.judge.rationale}; ` +
     `flagged decisions a human must see: ${flagged.length ? flagged.join('; ') : 'none'}` +
     (furyNotes.length ? `; advisory gate notes (non-blocking): ${furyNotes.slice(0, 10).join('; ')}` : '') +
-    `.\nWrite the PR body per your definition, watch every merge check to completion, report outcomes.`,
+    (manifest.conventions.shipChecklist && manifest.conventions.shipChecklist.length
+      ? `\nSHIP CHECKLIST (complete each item BEFORE opening the PR, committing on the branch where an item produces files): ${manifest.conventions.shipChecklist.join(' | ')}`
+      : '') +
+    `\nWrite the PR body per your definition, watch every merge check to completion, report outcomes.`,
   { agentType: 'olympus:hebe', schema: HEBE_SCHEMA, label: 'hebe:pr', phase: 'Ship', effort: 'xhigh' }
 )
 if (!hebe) throw new Error('Hebe (pr) returned nothing')

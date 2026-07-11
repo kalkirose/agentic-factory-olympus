@@ -38,6 +38,16 @@ const esc = (o) => JSON.stringify(JSON.stringify(o)) // JSON arg, shell-quoted
 function escalate(seam, items, extra) {
   return { status: 'escalation', seam, escalations: items, ...(extra || {}) }
 }
+// Cleanup steps are best-effort; they must never kill a run that already
+// has its result.
+async function talosSoft(scriptWithArgs, label, phaseName) {
+  try {
+    return await talos(scriptWithArgs, label, phaseName)
+  } catch (e) {
+    log(`cleanup step failed (non-fatal): ${scriptWithArgs}`)
+    return { ok: false }
+  }
+}
 
 // ---------------------------------------------------------------- Readiness
 phase('Readiness')
@@ -69,9 +79,15 @@ if (!iris.ready) {
 
 const init = await talos(`olympus-state init "${iris.unitId}"`, 'talos:init', 'Readiness')
 if (!init.ok) return escalate('clotho:state', [`state init failed: ${init.errorTail || JSON.stringify(init.output)}`])
-const manifest = init.output.manifest
 const resumed = init.output.resumed === true
-if (resumed) log(`Resuming run for ${iris.unitId} at first incomplete step`)
+if (resumed) {
+  log(`Resuming run for ${iris.unitId} at first incomplete step`)
+  // A resumed manifest carries init-time config; refresh config-derived
+  // fields so mid-run config edits reach the run (state is never touched).
+  await talos('olympus-state resync', 'talos:resync', 'Readiness')
+}
+const refreshed = await talos('olympus-state get', 'talos:get', 'Readiness')
+const manifest = refreshed.ok ? refreshed.output.manifest : init.output.manifest
 
 const conv = manifest.conventions || {}
 const baseBranch = (conv.branchTemplate || 'olympus/{unit}').replace('{unit}', iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-'))
@@ -339,9 +355,9 @@ if (!frozen) {
     const adopt = await talos(`olympus-branch create --name "${baseBranch}" --from "${winner.branch}"`, 'talos:adopt', 'Tests')
     if (!adopt.ok) return escalate('clotho:state', [`could not adopt winning suite: ${adopt.errorTail || JSON.stringify(adopt.output)}`])
     for (const c of candidates) {
-      if (c.branch !== winner.branch) await talos(`olympus-branch delete --name "${c.branch}"`, 'talos:tprune', 'Tests')
+      if (c.branch !== winner.branch) await talosSoft(`olympus-branch delete --name "${c.branch}"`, 'talos:tprune', 'Tests')
     }
-    await talos(`olympus-branch delete --name "${winner.branch}"`, 'talos:tprune-winner', 'Tests')
+    await talosSoft(`olympus-branch delete --name "${winner.branch}"`, 'talos:tprune-winner', 'Tests')
 
     // Bounded refinement against exactly the wrong implementations the
     // winner failed to kill, then freeze.

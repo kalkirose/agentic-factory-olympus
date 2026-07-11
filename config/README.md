@@ -34,7 +34,7 @@ Prometheus writes the file.
 | `testRalph` | Clotho (spec + tests) | Omit for a single authoring pass. With it: `passes` candidate suites on branches, `adversaryCount` Dolos wrong implementations measured via `killRateCommand` (`{tests}` substituted with the suite's files), a fact-anchored judge, then `refinementRounds` against surviving faults before the freeze. |
 | `commands.gates` | verdict script | Additional deterministic Tier-1 gates `[{name, command}]` run after typecheck — prohibited patterns, token conformance, duplication, dependency rules, mutation. |
 | `hooks.formatOnEditCommand` | format-on-edit hook | Run after every dev edit; `{file}` is replaced with the edited path. Omit to disable. |
-| `conventions` | branch/freeze scripts, Hebe (pr) | Branch naming (`{unit}` substituted), PR target, title prefix. |
+| `conventions` | branch/freeze scripts, Hebe (pr) | Branch naming (`{unit}` substituted), PR target, title prefix. `shipChecklist`: project-specific steps Hebe completes before opening the PR (spec copies, changelog entries…). |
 | `docPaths` | Cassandra (spec), Daedalus (tests), Hephaestus (dev) | Pointers, not dumps: agents retrieve these on demand. |
 
 `olympus-state init` resolves this config into each run's manifest, so a

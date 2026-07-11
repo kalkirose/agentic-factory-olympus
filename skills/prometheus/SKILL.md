@@ -20,6 +20,15 @@ field:
 - **Commands**: per-layer test commands (`fullSuite`), typecheck, a
   targeted-run hint. Prefer what CI already runs — the config should
   mirror the project's own definition of green.
+- **`commands.gates` — transcribe EVERY deterministic gate step from the
+  CI workflows**, not a subset. A gate that runs in CI but not in the
+  verdict is a guaranteed escape: the dev loop goes green locally and the
+  PR fails remotely (this exact miss shipped a red PR on the harness's
+  first story). Skip only gates that cannot run locally (deploy-bound
+  steps), and say so in the config as a comment field.
+- **`conventions.shipChecklist`**: pre-PR steps the project's DoD demands
+  beyond code (spec-in-repo copies, changelog rules) — read the
+  contributing/agent docs for these.
 - **Conventions**: branch naming, PR target branch, PR title pattern —
   from contributing docs, git history, or CI triggers.
 - **Doc paths**: conventions file (CLAUDE/AGENTS.md), ADRs, architecture,

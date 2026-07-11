@@ -37,9 +37,20 @@ const esc = (o) => JSON.stringify(JSON.stringify(o))
 function escalate(seam, items, extra) {
   return { status: 'escalation', seam, escalations: items, ...(extra || {}) }
 }
+// Cleanup steps are best-effort: a blocked branch delete must never kill a
+// run that has already produced its result (learned the hard way).
+async function talosSoft(scriptWithArgs, label, phaseName) {
+  try {
+    return await talos(scriptWithArgs, label, phaseName)
+  } catch (e) {
+    log(`cleanup step failed (non-fatal): ${scriptWithArgs}`)
+    return { ok: false }
+  }
+}
 
 // ------------------------------------------------------------------- Set up
 phase('Build loop')
+await talos('olympus-state resync', 'talos:resync', 'Build loop')
 const state = await talos('olympus-state get', 'talos:state', 'Build loop')
 if (!state.ok) return escalate('lachesis:state', [`no active run: ${state.errorTail || JSON.stringify(state.output)}`])
 const manifest = state.output.manifest
@@ -285,8 +296,8 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
   passes.push(entry)
   if (outcome === 'green') greens++
   else {
-    await talos(`olympus-branch create --name "${baseBranch}" --from ${frozen.sha}`, `talos:park-${n}`, 'Build loop')
-    await talos(`olympus-branch delete --name "${branch}"`, `talos:cleanup-${n}`, 'Build loop')
+    await talosSoft(`olympus-branch create --name "${baseBranch}" --from ${frozen.sha}`, `talos:park-${n}`, 'Build loop')
+    await talosSoft(`olympus-branch delete --name "${branch}"`, `talos:cleanup-${n}`, 'Build loop')
   }
   await talos(`olympus-state merge ${esc({ passes, furies: { lowFindings: lowFindingsLedger.slice(0, 40) } })}`, `talos:record-${n}`, 'Build loop')
   await talos(`olympus-state step pass-${n} ${outcome} ${esc({ branch })}`, `talos:step-${n}-end`, 'Build loop')
@@ -350,7 +361,7 @@ if (!minos || !greenBranches.includes(minos.winner)) {
 const co = await talos(`olympus-branch checkout --name "${minos.winner}"`, 'talos:checkout-winner', 'Judge')
 if (!co.ok) return escalate('lachesis:state', [`could not check out winner: ${co.errorTail || JSON.stringify(co.output)}`])
 for (const b of greenBranches) {
-  if (b !== minos.winner) await talos(`olympus-branch delete --name "${b}"`, 'talos:prune', 'Judge')
+  if (b !== minos.winner) await talosSoft(`olympus-branch delete --name "${b}"`, 'talos:prune', 'Judge')
 }
 await talos(
   `olympus-state merge ${esc({ judge: { winner: minos.winner, scores: minos.scores, rationale: minos.rationale }, phase: 'atropos' })}`,

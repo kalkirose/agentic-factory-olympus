@@ -137,6 +137,24 @@ if (cmd === 'init') {
   }
   manifest.steps[name] = rec;
   saveAndPrint(manifest, manifestPath);
+} else if (cmd === 'resync') {
+  // Refresh the manifest's config-derived fields from .olympus/config.json.
+  // Run-state (frozenTests, passes, judge, pr, steps, learnings) is NEVER
+  // touched — this exists because a config edit mid-run otherwise silently
+  // diverges from the manifest snapshot taken at init.
+  const configPath = path.join(cwd, '.olympus', 'config.json');
+  if (!fs.existsSync(configPath)) die('.olympus/config.json not found');
+  const config = readJson(configPath);
+  const { manifest, manifestPath } = loadActiveManifest();
+  const refreshed = [];
+  for (const key of ['commands', 'budget', 'hooks', 'conventions', 'docPaths', 'infraFlakeSignatures', 'uiPathPatterns', 'testRalph']) {
+    if (config[key] !== undefined && JSON.stringify(manifest[key]) !== JSON.stringify(config[key])) {
+      manifest[key] = config[key];
+      refreshed.push(key);
+    }
+  }
+  writeJson(manifestPath, manifest);
+  process.stdout.write(JSON.stringify({ ok: true, refreshed }));
 } else if (cmd === 'learn') {
   // Append a distilled entry to the run's learnings file (used by triage
   // routes and budget breaches; dev agents append directly themselves).

@@ -45,7 +45,10 @@
   "conventions": {
     "branchTemplate": "story/{unit}",
     "prTargetBranch": "main",
-    "prTitlePrefix": "[{unit}] "
+    "prTitlePrefix": "[{unit}] ",
+    "shipChecklist": [
+      "copy the finalized story/spec file to docs/specs/<unit>.md and commit it on the branch (per-story spec-in-repo rule)"
+    ]
   },
 
   "docPaths": {
