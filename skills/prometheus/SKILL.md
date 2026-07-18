@@ -45,8 +45,10 @@ value you could not settle as OPEN.
 
 ## Step 2 — ask
 
-Present the OPEN items as direct questions, one batch. Do not ask about
-anything you could infer; do not silently default an OPEN item.
+Present the OPEN items as direct questions, one batch, each led by your
+recommended answer and its one-line reason, so the user can accept it in
+a word. Do not ask about anything you could infer; do not silently
+default an OPEN item.
 
 ## Step 3 — materialize
 
