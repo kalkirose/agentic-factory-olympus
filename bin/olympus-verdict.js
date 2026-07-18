@@ -10,7 +10,7 @@
 //   3. test integrity: no frozen test path differs from the frozen SHA
 //   4. frozen suite green: every configured layer command exits 0
 //   5. typecheck green
-// Informational (never fails Phase A): lockfile changed vs. frozen SHA.
+// Informational (never fails the verdict): lockfile changed vs. frozen SHA.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -101,7 +101,7 @@ if (pass && Array.isArray(manifest.commands.gates)) {
   }
 }
 
-// Informational: lockfile drift (dependency gate hardens in Phase B).
+// Informational: lockfile drift (no dependency gate is configured).
 const lockfiles = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'Cargo.lock', 'poetry.lock'];
 const lockDiff = git(`diff --name-only ${frozen.sha} HEAD -- ${lockfiles.join(' ')}`, cwd);
 const lockChanged = lockDiff.tail.trim();
