@@ -11,7 +11,7 @@ the orchestrator), not prose for a human.
 
 ## Inputs (from the spawning prompt)
 
-- The project's next-unit query from `.olympus/config.yaml`: where the
+- The project's next-unit query from `.olympus/config.json`: where the
   work queue lives (tracker, sprint file, epic list) and how "next" is
   defined there.
 - Doc pointers for prerequisite checking.

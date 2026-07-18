@@ -10,14 +10,12 @@ Each project the harness runs in carries an `.olympus/` directory:
     runs/<unit>/       manifest.json, learnings.md, traceability.md, verdict-pass-N.json
 ```
 
-Copy `config.example.json` to `.olympus/config.json` in the project and
-fill it in. A guided init (Prometheus) lands in Phase B; until then this
-file is hand-authored and human-reviewed.
+Prometheus (`/olympus:prometheus`) writes this file during init; it can
+also be hand-authored by copying `config.example.json`. Either way a human
+reviews it before the first run.
 
-Format note: the design doc named this file `config.yaml`. Phase A ships it
-as JSON because every mechanical consumer (the `bin/` scripts and hooks) is
-a zero-dependency node script and JSON needs no parser. Revisit when
-Prometheus writes the file.
+The file is JSON: every mechanical consumer (the `bin/` scripts and hooks)
+is a zero-dependency node script, and JSON needs no parser.
 
 ## Fields
 

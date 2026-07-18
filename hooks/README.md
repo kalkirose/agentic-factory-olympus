@@ -1,6 +1,6 @@
 # Enforcement hooks
 
-Mechanical enforcement only; judgment stays with agents. Three hooks:
+Mechanical enforcement only; judgment stays with agents. Four hooks:
 
 | Script | Event | Scope (self-enforced) | Effect |
 |---|---|---|---|

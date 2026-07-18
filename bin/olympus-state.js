@@ -6,10 +6,18 @@
 //   olympus-state init <unitId>      create manifest from .olympus/config.json,
 //                                    point active-run.json at it (idempotent:
 //                                    re-init of the same unit keeps the manifest)
-//   olympus-state get                print the active manifest
+//   olympus-state get                print the active manifest + its key list
 //   olympus-state merge <json>       shallow-merge a JSON fragment into the
 //                                    manifest (object values merge one level deep)
 //   olympus-state step <name> <status> [<json>]   record a step outcome
+//   olympus-state sidecar set <name> <json>       write a diagnostics sidecar
+//   olympus-state sidecar get <name>              print a diagnostics sidecar
+//   olympus-state learn <text> --status <s>       append a status-tagged
+//                                    learnings entry (hypothesis|refuted|confirmed|fact)
+//   olympus-state version            print the installed plugin version
+//   olympus-state resync             refresh config-derived manifest fields;
+//                                    reports steps stuck at "started" (staleStarted)
+//   olympus-state commit [<msg>]     commit accumulated .olympus/ state
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -42,9 +50,20 @@ function loadActiveManifest() {
   return { manifest: readJson(manifestPath), manifestPath };
 }
 
-function saveAndPrint(manifest, manifestPath) {
+function saveAndPrint(manifest, manifestPath, extra) {
   writeJson(manifestPath, manifest);
-  process.stdout.write(JSON.stringify({ ok: true, manifest }));
+  process.stdout.write(JSON.stringify({ ok: true, manifest, ...(extra || {}) }));
+}
+
+// The manifest reaches workflow scripts through an LLM relay; the key list
+// lets the reader verify no top-level field was dropped in transit.
+function keysOf(manifest) {
+  return Object.keys(manifest);
+}
+
+function sidecarPath(manifestPath, name) {
+  const safe = String(name).replace(/[^a-zA-Z0-9._-]/g, '-');
+  return path.join(path.dirname(manifestPath), 'sidecar', `${safe}.json`);
 }
 
 const [, , cmd, ...args] = process.argv;
@@ -90,10 +109,12 @@ if (cmd === 'init') {
     writeJson(manifestPath, manifest);
   }
   writeJson(activePath, { unitId, manifest: relManifest.replace(/\\/g, '/') });
-  process.stdout.write(JSON.stringify({ ok: true, resumed: manifest.steps && Object.keys(manifest.steps).length > 0, manifest }));
+  process.stdout.write(
+    JSON.stringify({ ok: true, resumed: manifest.steps && Object.keys(manifest.steps).length > 0, manifest, keys: keysOf(manifest) })
+  );
 } else if (cmd === 'get') {
   const { manifest } = loadActiveManifest();
-  process.stdout.write(JSON.stringify({ ok: true, manifest }));
+  process.stdout.write(JSON.stringify({ ok: true, manifest, keys: keysOf(manifest) }));
 } else if (cmd === 'merge') {
   if (!args[0]) die('usage: olympus-state merge <json>');
   let fragment;
@@ -138,6 +159,30 @@ if (cmd === 'init') {
   }
   manifest.steps[name] = rec;
   saveAndPrint(manifest, manifestPath);
+} else if (cmd === 'sidecar') {
+  // Diagnostics live beside the manifest, never inside it: the manifest is
+  // hot-path-only because it travels through an LLM relay (see docs/adr/0001).
+  const [sub, name, json] = args;
+  const { manifestPath } = loadActiveManifest();
+  if (sub === 'set') {
+    if (!name || !json) die('usage: olympus-state sidecar set <name> <json>');
+    let value;
+    try {
+      value = JSON.parse(json);
+    } catch (e) {
+      die(`sidecar value is not valid JSON: ${e.message}`);
+    }
+    const p = sidecarPath(manifestPath, name);
+    writeJson(p, value);
+    process.stdout.write(JSON.stringify({ ok: true, sidecar: name, bytes: fs.statSync(p).size }));
+  } else if (sub === 'get') {
+    if (!name) die('usage: olympus-state sidecar get <name>');
+    const p = sidecarPath(manifestPath, name);
+    if (!fs.existsSync(p)) die(`sidecar not found: ${name}`);
+    process.stdout.write(JSON.stringify({ ok: true, sidecar: name, output: readJson(p) }));
+  } else {
+    die('usage: olympus-state sidecar set|get <name> [<json>]');
+  }
 } else if (cmd === 'resync') {
   // Refresh the manifest's config-derived fields from .olympus/config.json.
   // Run-state (frozenTests, passes, judge, pr, steps, learnings) is NEVER
@@ -155,20 +200,65 @@ if (cmd === 'init') {
     }
   }
   writeJson(manifestPath, manifest);
-  process.stdout.write(JSON.stringify({ ok: true, refreshed }));
+
+  // Resync runs at workflow start, when no agent of this run is live
+  // (runs are single-active). Any step still "started" is therefore
+  // anomalous: either it is about to be legitimately re-run, or its work
+  // finished and the terminal write was lost (a torn manifest). Report
+  // them with the last telemetry event as evidence; the workflow logs
+  // this so a human can verify completed work before it is redone.
+  const staleStarted = [];
+  const telePath = path.join(stateDir, 'telemetry.log');
+  let lastTelemetry = null;
+  if (fs.existsSync(telePath)) {
+    const lines = fs.readFileSync(telePath, 'utf8').trim().split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const e = JSON.parse(lines[i]);
+        lastTelemetry = { ts: e.ts, event: e.event, agent_type: e.agent_type };
+        break;
+      } catch (e) {
+        // skip malformed tail lines
+      }
+    }
+  }
+  for (const [name, rec] of Object.entries(manifest.steps || {})) {
+    if (rec.status === 'started') {
+      staleStarted.push({ step: name, startedAt: rec.at, lastTelemetry });
+    }
+  }
+  process.stdout.write(JSON.stringify({ ok: true, refreshed, staleStarted }));
 } else if (cmd === 'learn') {
-  // Append a distilled entry to the run's learnings file (used by triage
-  // routes and budget breaches; dev agents append directly themselves).
-  const text = args[0];
-  if (!text) die('usage: olympus-state learn "<entry text>"');
+  // Append a status-tagged entry to the run's learnings file. Statuses:
+  //   hypothesis — a claim no deterministic signal has confirmed (agents
+  //                may only ever record this)
+  //   refuted    — the claim's fix failed the official verdict
+  //   confirmed  — the claim's fix went green under the official verdict
+  //   fact       — a mechanically-recorded event (CI excerpt, seat
+  //                fallback), not a claim
+  // Promotion to refuted/confirmed is the workflow script's act, keyed to
+  // verdict outcomes — never the authoring agent's (see docs/adr/0002).
+  const STATUSES = ['hypothesis', 'refuted', 'confirmed', 'fact'];
+  const si = args.indexOf('--status');
+  const status = si >= 0 ? args[si + 1] : null;
+  const text = args.filter((a, i) => i !== si && i !== si + 1)[0];
+  if (!text || !status) die(`usage: olympus-state learn "<entry text>" --status <${STATUSES.join('|')}>`);
+  if (!STATUSES.includes(status)) die(`invalid status "${status}" — expected one of: ${STATUSES.join(', ')}`);
   const { manifest } = loadActiveManifest();
   const learningsPath = path.isAbsolute(manifest.learningsPath)
     ? manifest.learningsPath
     : path.join(cwd, manifest.learningsPath);
   fs.mkdirSync(path.dirname(learningsPath), { recursive: true });
   const stamp = new Date().toISOString();
-  fs.appendFileSync(learningsPath, `\n## ${stamp} (harness-recorded)\n\n${text}\n`);
-  process.stdout.write(JSON.stringify({ ok: true, appended: true, file: manifest.learningsPath }));
+  fs.appendFileSync(learningsPath, `\n## ${stamp} [${status}] (harness-recorded)\n\n${text}\n`);
+  process.stdout.write(JSON.stringify({ ok: true, appended: true, status, file: manifest.learningsPath }));
+} else if (cmd === 'version') {
+  // Reports the version of the installed plugin this script belongs to, so
+  // workflows can refuse to run against a stale plugin cache.
+  const pluginJson = path.join(__dirname, '..', '.claude-plugin', 'plugin.json');
+  if (!fs.existsSync(pluginJson)) die('plugin.json not found relative to this script');
+  const plugin = readJson(pluginJson);
+  process.stdout.write(JSON.stringify({ ok: true, version: plugin.version, name: plugin.name }));
 } else if (cmd === 'commit') {
   // Commit accumulated .olympus/ state at a seam moment (freeze, pre-PR).
   const { execSync } = require('child_process');
@@ -186,5 +276,5 @@ if (cmd === 'init') {
     die(`state commit failed: ${e.message}`);
   }
 } else {
-  die(`unknown command: ${cmd || '(none)'} — expected init|get|merge|step|commit`);
+  die(`unknown command: ${cmd || '(none)'} — expected init|get|merge|step|sidecar|resync|learn|version|commit`);
 }

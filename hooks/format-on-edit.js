@@ -1,6 +1,6 @@
 // PostToolUse hook on the dev agent (Hephaestus): after every Edit/Write,
 // runs the project's format/lint-on-edit command (from the run manifest,
-// which Lachesis resolves out of .olympus/config.yaml). Deterministic
+// resolved out of .olympus/config.json at run init). Deterministic
 // instant feedback that keeps trivial issues out of agent token budgets.
 // Exit 2 feeds the tool's output back to the agent; missing config = no-op.
 'use strict';

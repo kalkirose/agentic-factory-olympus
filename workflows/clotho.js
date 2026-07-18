@@ -22,18 +22,52 @@ const TALOS_SCHEMA = {
   },
   required: ['ok'],
 }
+// A relay that dies gets one fresh retry, then a soft failure the caller
+// can escalate — a single crashed agent must never kill the whole run.
 async function talos(scriptWithArgs, label, phaseName) {
-  const r = await agent(
-    `Run the Olympus script: ${scriptWithArgs}\n` +
-      `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
-      `and set "ok" to whether the script itself reported ok:true. ` +
-      `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
-    { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label, phase: phaseName, effort: 'low' }
-  )
-  if (!r) throw new Error(`talos relay returned nothing for: ${scriptWithArgs}`)
-  return r
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let r = null
+    try {
+      r = await agent(
+        `Run the Olympus script: ${scriptWithArgs}\n` +
+          `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
+          `and set "ok" to whether the script itself reported ok:true. ` +
+          `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
+        { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label: attempt === 1 ? label : `${label}-retry`, phase: phaseName, effort: 'xhigh' }
+      )
+    } catch (e) {
+      r = null
+    }
+    if (r) return r
+    if (attempt === 1) log(`relay returned nothing for: ${scriptWithArgs} — one fresh retry`)
+  }
+  return { ok: false, errorTail: `relay failed twice for: ${scriptWithArgs}` }
 }
-const esc = (o) => JSON.stringify(JSON.stringify(o)) // JSON arg, shell-quoted
+// Guarded seat dispatch: same one-retry-then-null contract for judgment
+// seats. Callers decide what a null means (escalate, fall back, fail soft).
+async function seat(prompt, opts) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let r = null
+    try {
+      r = await agent(prompt, attempt === 1 ? opts : { ...opts, label: `${opts.label}-retry` })
+    } catch (e) {
+      r = null
+    }
+    if (r) return r
+    if (attempt === 1) log(`${opts.label}: seat returned nothing — one fresh retry`)
+  }
+  return null
+}
+const MIN_STATE_VERSION = '0.2.0'
+function versionLt(a, b) {
+  const pa = String(a).split('.').map(Number)
+  const pb = String(b).split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0)
+  }
+  return false
+}
+const esc = (o) => JSON.stringify(JSON.stringify(o))
 
 function escalate(seam, items, extra) {
   return { status: 'escalation', seam, escalations: items, ...(extra || {}) }
@@ -56,22 +90,49 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
 // Config models.fableSeats: 'auto' (default: try fable, fall back) |
 // 'opus' (dispatch variants directly) | 'fable' (never fall back).
 let fableSeatPref = 'auto'
-async function seatAgent(seat, prompt, opts) {
+async function seatAgent(seatName, prompt, opts) {
   if (fableSeatPref !== 'opus') {
-    const r = await agent(prompt, { ...opts, agentType: `olympus:${seat}` })
+    const r = await seat(prompt, { ...opts, agentType: `olympus:${seatName}` })
     if (r) return r
-    if (fableSeatPref === 'fable') throw new Error(`${seat} (fable seat) returned nothing and fallback is disabled (models.fableSeats: 'fable')`)
-    log(`${seat}: fable dispatch returned nothing — falling back to ${seat}-opus`)
+    if (fableSeatPref === 'fable') throw new Error(`${seatName} (fable seat) returned nothing and fallback is disabled (models.fableSeats: 'fable')`)
+    log(`${seatName}: fable dispatch returned nothing — falling back to ${seatName}-opus`)
     await talosSoft(
-      `olympus-state learn ${esc(`Fable seat '${seat}' fell back to '${seat}-opus' (dispatch returned nothing — model unavailable or terminal error). Ledger comparisons for this run must account for the seat model change.`)}`,
+      `olympus-state learn ${esc(`Fable seat '${seatName}' fell back to '${seatName}-opus' (dispatch returned nothing — model unavailable or terminal error). Ledger comparisons for this run must account for the seat model change.`)} --status fact`,
       'talos:seat-fallback', opts.phase
     )
   }
-  return agent(prompt, { ...opts, agentType: `olympus:${seat}-opus`, label: `${(opts && opts.label) || seat}-opus` })
+  return seat(prompt, { ...opts, agentType: `olympus:${seatName}-opus`, label: `${(opts && opts.label) || seatName}-opus` })
+}
+
+// Integrity guard on the state relay: the script prints its key list; a
+// relayed manifest missing declared keys is a relay failure to retry, never
+// state truth (see docs/adr/0001).
+async function getState(phaseName) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const st = await talos('olympus-state get', attempt === 1 ? 'talos:state' : 'talos:state-guard-retry', phaseName)
+    if (!st.ok) return st
+    const m = st.output && st.output.manifest
+    const keys = st.output && st.output.keys
+    if (m && Array.isArray(keys)) {
+      const missing = keys.filter((k) => !(k in m))
+      if (!missing.length) return st
+      log(`state relay dropped keys: ${missing.join(', ')} — retrying the relay`)
+    } else if (m) {
+      return st
+    }
+  }
+  return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
 
 // ---------------------------------------------------------------- Readiness
 phase('Readiness')
+const ver = await talos('olympus-state version', 'talos:version', 'Readiness')
+const installedVersion = ver.ok && ver.output && ver.output.version
+if (!installedVersion || versionLt(installedVersion, MIN_STATE_VERSION)) {
+  return escalate('clotho:plugin', [
+    `installed olympus plugin is stale (state version ${installedVersion || 'unknown'}, this workflow needs ≥ ${MIN_STATE_VERSION}) — reinstall the plugin, then re-run olympus:clotho`,
+  ])
+}
 const requestedUnit = args && args.unitId ? String(args.unitId) : null
 
 const IRIS_SCHEMA = {
@@ -86,14 +147,14 @@ const IRIS_SCHEMA = {
   },
   required: ['unitId', 'title', 'summary', 'ready', 'unmet'],
 }
-const iris = await agent(
+const iris = await seat(
   (requestedUnit
     ? `The unit of work to check is "${requestedUnit}". Do not pick a different one.\n`
     : `Find the next unit of work using the project's next-unit query in .olympus/config.json.\n`) +
     `Then run the full readiness check from your definition. Include the path to the unit's spec file as specPath.`,
   { agentType: 'olympus:iris', schema: IRIS_SCHEMA, label: 'iris:readiness', phase: 'Readiness', effort: 'xhigh' }
 )
-if (!iris) throw new Error('Iris (scout) returned nothing')
+if (!iris) return escalate('clotho:seat', ['Iris (scout) returned nothing after a retry — re-run olympus:clotho to resume'])
 if (!iris.ready) {
   return escalate('clotho:readiness', iris.unmet, { unit: iris.unitId, title: iris.title })
 }
@@ -105,9 +166,16 @@ if (resumed) {
   log(`Resuming run for ${iris.unitId} at first incomplete step`)
   // A resumed manifest carries init-time config; refresh config-derived
   // fields so mid-run config edits reach the run (state is never touched).
-  await talos('olympus-state resync', 'talos:resync', 'Readiness')
+  const rs = await talos('olympus-state resync', 'talos:resync', 'Readiness')
+  if (rs.ok && rs.output && Array.isArray(rs.output.staleStarted) && rs.output.staleStarted.length) {
+    log(
+      `WARNING — steps still read "started" from a prior session: ${rs.output.staleStarted
+        .map((s) => s.step)
+        .join(', ')}. Their work may have completed without a terminal write (torn manifest); the resume re-runs them.`
+    )
+  }
 }
-const refreshed = await talos('olympus-state get', 'talos:get', 'Readiness')
+const refreshed = await getState('Readiness')
 const manifest = refreshed.ok ? refreshed.output.manifest : init.output.manifest
 
 const conv = manifest.conventions || {}
@@ -157,7 +225,7 @@ if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
       `Write your findings file to "${findingsPath}". Run all three checks from your definition.`,
     { schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
   )
-  if (!cassandra) throw new Error('Cassandra (spec) returned nothing')
+  if (!cassandra) return escalate('clotho:seat', ['Cassandra (spec) returned nothing after retry and fallback — re-run olympus:clotho to resume'])
   const hard = cassandra.findings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'REVISION')
   if (cassandra.verdict === 'blocked' || hard.length > 0) {
     await talos(`olympus-state step spec-validation escalated ${esc({ findingsPath: cassandra.findingsPath })}`, 'talos:step', 'Spec')
@@ -262,19 +330,19 @@ async function authorAndValidate(passLabel, extraPrompt) {
         `Do not commit; the harness owns commits.`,
       { schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
     )
-    if (!suite) throw new Error('Daedalus (tests) returned nothing')
+    if (!suite) return { error: escalate('clotho:seat', ['Daedalus (tests) returned nothing after retry and fallback — re-run olympus:clotho to resume']) }
 
     const red = await talos('olympus-redstate', 'talos:redstate', 'Tests')
     if (!red.ok) return { error: escalate('clotho:environment', [`red-state run failed to execute: ${red.errorTail || JSON.stringify(red.output)}`]) }
 
-    const argus = await agent(
+    const argus = await seat(
       `Validate the authored suite for unit ${iris.unitId}.\n` +
         `Spec: "${iris.specPath}". Matrix: "${suite.matrixPath}". Test files: ${suite.testFiles.join(', ')}.\n` +
         `Red-state run results (raw):\n${JSON.stringify(red.output.results || red.output)}\n` +
         `Run every check from your definition.`,
       { agentType: 'olympus:argus', schema: ARGUS_SCHEMA, label: `argus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
     )
-    if (!argus) throw new Error('Argus (validator) returned nothing')
+    if (!argus) return { error: escalate('clotho:seat', ['Argus (validator) returned nothing after a retry — re-run olympus:clotho to resume']) }
     const blockers = argus.findings.filter((f) => f.severity === 'BLOCKER')
     if (argus.verdict === 'pass' && blockers.length === 0) {
       await talos(`olympus-state step test-author done ${esc({ files: suite.testFiles.length, matrix: suite.matrixPath })}`, 'talos:step', 'Tests')
@@ -312,19 +380,19 @@ const adversaryDir = `${runDir}/adversary`
 if (!frozen) {
   // Adversary set: generated once, reused across every candidate suite.
   if (tr.adversaryCount > 0 && !(steps['adversary'] && steps['adversary'].status === 'done')) {
-    const dolos = await agent(
+    const dolos = await seat(
       `Write ${tr.adversaryCount} plausible WRONG implementations for unit ${iris.unitId}.\n` +
         `Spec (your only oracle): "${iris.specPath}". Write each implementation under "${adversaryDir}/<id>/" ` +
         `mirroring repo-relative paths (e.g. ${adversaryDir}/w1/src/module.ts). Follow your definition: one deliberate ` +
         `spec-violating fault each, diverse fault classes, otherwise complete and plausible.`,
       { agentType: 'olympus:dolos', schema: DOLOS_SCHEMA, label: 'dolos:adversary', phase: 'Tests', effort: 'xhigh' }
     )
-    if (!dolos) throw new Error('Dolos (adversary) returned nothing')
+    if (!dolos) return escalate('clotho:seat', ['Dolos (adversary) returned nothing after a retry — re-run olympus:clotho to resume'])
     await talos(`olympus-state step adversary done ${esc({ count: dolos.implementations.length, manifest: dolos.implementations })}`, 'talos:step', 'Tests')
   }
 
   if (tr.passes <= 1) {
-    // Single-pass shape (the Phase-A skeleton, still config-reachable).
+    // Single-pass shape (config-reachable alternative to the tournament).
     const r = await authorAndValidate('author', `Work on the current branch (${baseBranch}).\n`)
     if (r.error) return r.error
     const sweep = await killSweep(r.suite, 'single')

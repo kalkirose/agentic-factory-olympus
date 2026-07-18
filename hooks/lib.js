@@ -44,7 +44,8 @@ function normalize(p) {
 
 // True when target (absolute or cwd-relative) is one of the frozen paths
 // or sits under a frozen directory. Frozen entries may themselves be
-// absolute (older manifests) — relativize both sides before comparing.
+// absolute (some manifests store absolute paths) — relativize both sides
+// before comparing.
 function isFrozenPath(target, frozenPaths, cwd) {
   if (!target || !Array.isArray(frozenPaths)) return false;
   const toRel = (p) =>

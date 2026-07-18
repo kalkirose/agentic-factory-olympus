@@ -28,9 +28,16 @@ if (cmd === 'create') {
   if (head.tail.trim() === name) {
     printAndExit({ ok: false, error: `refusing to delete the checked-out branch ${name}` }, 1);
   }
+  // Every deletion leaves a discarded ref at the tip, so recovery is
+  // deterministic (git branch <name> refs/olympus/discarded/<name>) and
+  // never depends on reflog retention. See docs/adr/0005.
+  const tip = git(`rev-parse "refs/heads/${name}"`, cwd);
+  if (!tip.ok) printAndExit({ ok: false, error: `branch not found: ${name}` }, 1);
+  const tag = git(`update-ref "refs/olympus/discarded/${name}" ${tip.tail.trim()}`, cwd);
+  if (!tag.ok) printAndExit({ ok: false, error: `could not write discarded ref: ${tag.tail}` }, 1);
   const r = git(`branch -D "${name}"`, cwd);
   if (!r.ok) printAndExit({ ok: false, error: r.tail }, 1);
-  printAndExit({ ok: true, deleted: name });
+  printAndExit({ ok: true, deleted: name, discardedRef: `refs/olympus/discarded/${name}` });
 } else if (cmd === 'checkout') {
   const name = argOf('--name');
   if (!name) printAndExit({ ok: false, error: 'usage: checkout --name <branch>' }, 1);

@@ -19,15 +19,6 @@ judgment points; everything mechanical is script or hook. Each pass's dev
 agent starts with clean context — it inherits distilled learnings from
 prior passes, never their code.
 
-## Status
-
-Phase B in build. The skeleton (Phase A) is validated end-to-end; the
-organs are authored: the six Furies (official LLM gate agents) with a
-verification pass, the config-gated test tournament (adversary kill
-rates, suite judge, bounded refinement), triage routes with a
-route-execution cap, and the lifecycle telemetry ledger. Deterministic
-Tier-1 gates extend per project via `commands.gates`.
-
 ## Install
 
 ```
@@ -35,9 +26,10 @@ claude plugin marketplace add kalkirose/agentic-factory-olympus
 claude plugin install olympus@olympus
 ```
 
-Then, in the target project, create `.olympus/config.yaml` (see
-`config/config.example.yaml`; a guided init lands in Phase B). Projects pin
-a plugin version — upgrades are explicit, never silent.
+Then, in the target project, run `/olympus:prometheus` for a guided,
+scan-first init, or write `.olympus/config.json` by hand (see
+`config/config.example.json`). Projects pin a plugin version — upgrades
+are explicit, never silent.
 
 ## Layout
 
@@ -47,7 +39,7 @@ a plugin version — upgrades are explicit, never silent.
 | `workflows/` | The three Fates, as named workflows (`olympus:clotho`, …) |
 | `hooks/` | Mechanical enforcement scripts (frozen-test write denial, format/lint, context-budget backstop) |
 | `bin/` | Deterministic run mechanics: state, verdict, freeze, red-state, branch plumbing — no LLM anywhere in them |
-| `skills/` | `hermes` — the conversational entry point |
+| `skills/` | `hermes` (conversational entry point), `prometheus` (project init) |
 | `config/` | Config field reference + a generic example |
 
 ## The cast

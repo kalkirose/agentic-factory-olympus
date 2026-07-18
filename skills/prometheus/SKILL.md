@@ -23,8 +23,7 @@ field:
 - **`commands.gates` — transcribe EVERY deterministic gate step from the
   CI workflows**, not a subset. A gate that runs in CI but not in the
   verdict is a guaranteed escape: the dev loop goes green locally and the
-  PR fails remotely (this exact miss shipped a red PR on the harness's
-  first story). Skip only gates that cannot run locally (deploy-bound
+  PR fails remotely. Skip only gates that cannot run locally (deploy-bound
   steps), and say so in the config as a comment field.
 - **`conventions.shipChecklist`**: pre-PR steps the project's DoD demands
   beyond code (spec-in-repo copies, changelog rules) — read the
