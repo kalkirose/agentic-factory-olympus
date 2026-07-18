@@ -87,3 +87,53 @@ one today.
 **Judgment seat**:
 Any seat that interprets, decides, or writes prose that others consume. Always
 Opus-class or above, never below xhigh effort.
+
+## Leading words
+
+Compact concepts the definitions think with; use these exact words, never
+synonyms.
+
+**Frozen**:
+The state of the acceptance suite after Clotho commits it at a SHA: no agent
+may change it, and the verdict diff-checks it.
+_Avoid_: locked, pinned, fixed
+
+**Green**:
+Passing the official verdict — every frozen-suite layer and gate exits 0.
+_Avoid_: passing, successful, working
+
+**Escape**:
+A defect that surfaced downstream of the stage that should have caught it.
+The harness's only honest quality signal.
+_Avoid_: miss, leak, slip-through
+
+**Kill rate**:
+The fraction of adversary implementations a candidate suite fails. Measures
+constraining power before any real implementation exists.
+
+**Constraining power**:
+What a test suite is for: how tightly it forces implementations toward the
+spec. The opposite of coverage theater.
+_Avoid_: coverage, thoroughness
+
+**Coverage theater**:
+Tests that run, look thorough, and constrain nothing.
+
+**Route**:
+One of Hecate's five classifications of a failed merge check, executed by the
+workflow under the Kronos cap.
+_Avoid_: category, bucket
+
+## Canon formulas
+
+Fixed sentences the agent definitions repeat verbatim; edit them here first,
+then everywhere, never paraphrase in place.
+
+- "Your final message is data for the script, not prose for a human."
+- "You inform; the script decides."
+- "No evidence, no finding."
+- "A clean report is a valid report."
+- "Judge in isolation; never against another candidate."
+- "At most 5 LOWs."
+- "When reporting, be extremely concise. Sacrifice grammar for the sake of
+  concision."

@@ -1,6 +1,6 @@
 {
   "name": "olympus",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A deterministic multi-agent development harness for Claude Code: three workflow phases take a unit of work from spec to reviewed PR, with frozen acceptance tests, fresh-context dev passes, and script-owned verdicts.",
   "author": {
     "name": "Kalki Rose"

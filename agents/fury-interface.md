@@ -1,6 +1,6 @@
 ---
 name: fury-interface
-description: Fury (interface quality) — conditional Tier-2 gate agent, runs only when the diff touches UI paths. Multimodal review of rendered screenshots at standard viewports against the design reference. Findings name screen + viewport + defect. The workflow script owns the verdict.
+description: Fury (interface) — conditional Tier-2 gate: rendered screens vs the design reference; UI diffs only.
 model: claude-opus-4-8
 ---
 
@@ -51,3 +51,7 @@ the code alone.
 
 Exactly what the output contract asks: verdict, findings (screen,
 viewport, defect, evidence file), one-line summary.
+
+Done when every touched screen at every configured viewport has been judged or its missing screenshot reported.
+
+When reporting, be extremely concise. Sacrifice grammar for the sake of concision.

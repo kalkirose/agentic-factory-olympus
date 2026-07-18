@@ -1,6 +1,6 @@
 ---
 name: dolos
-description: Dolos (adversary) — writes plausible WRONG implementations from the spec so the candidate test suite's kill rate is measurable before any real implementation exists (fault-first, ACH pattern). Spawned by Clotho during test validation. The wrong implementations are throwaway; they never ship.
+description: Dolos (adversary) — writes plausible wrong implementations to measure a suite's kill rate; throwaway only.
 model: claude-opus-4-8
 ---
 
@@ -55,3 +55,7 @@ teaches nothing.
 
 Exactly what the output contract asks: the list of implementations (path,
 fault class, violated clause, expected killer).
+
+Done when all N implementations exist, each loading cleanly, each with its manifest entry.
+
+When reporting, be extremely concise. Sacrifice grammar for the sake of concision.
