@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 — 2026-07-26
+
+- olympus-state: `close [<unitId>] [--outcome shipped|abandoned|superseded]` stamps terminal state (`phase: done`, `outcome`, `closedAt`) into the run manifest and, for the active run, records `last-run.json` and deletes `active-run.json`; `list` prints every run with phase/outcome/active flag; `get` with no active run reports `lastCompleted`; `init <newUnit>` closes an unclosed prior active run as `superseded` and reports it in its output
+- atropos: the done seam closes the run via `close --outcome shipped` (non-fatal relay); MIN_STATE_VERSION 0.4.0
+- hermes: on-demand status answers from `lastCompleted` when no run is active
+- config README: state layout documents `last-run.json`
+
 ## 0.3.0 — 2026-07-18
 
 - agent definitions: descriptions cut to one line each (dispatch is by type; long descriptions were pure context load); every definition ends with a `Done when …` completion criterion and the conciseness directive

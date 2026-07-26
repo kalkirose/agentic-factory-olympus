@@ -7,6 +7,11 @@
 //                                    point active-run.json at it (idempotent:
 //                                    re-init of the same unit keeps the manifest)
 //   olympus-state get                print the active manifest + its key list
+//   olympus-state list              every run under .olympus/state/runs with
+//                                    phase/outcome/active flag
+//   olympus-state close [<unitId>] [--outcome shipped|abandoned|superseded]
+//                                    stamp terminal state on a run (default the
+//                                    active one) and release active-run.json
 //   olympus-state merge <json>       shallow-merge a JSON fragment into the
 //                                    manifest (object values merge one level deep)
 //   olympus-state step <name> <status> [<json>]   record a step outcome
@@ -66,6 +71,34 @@ function sidecarPath(manifestPath, name) {
   return path.join(path.dirname(manifestPath), 'sidecar', `${safe}.json`);
 }
 
+// Terminal transition shared by `close` and init's supersede path: stamp
+// the manifest; when the target is the active run, record last-run.json
+// and delete the pointer. active-run.json existing is the definition of
+// "a run is live"; run manifests are permanent (they are the eval ledger).
+function closeRun(manifest, manifestPath, relManifest, outcome) {
+  const alreadyClosed = manifest.phase === 'done' && !!manifest.closedAt;
+  if (!alreadyClosed) {
+    manifest.phase = 'done';
+    manifest.outcome = outcome;
+    manifest.closedAt = new Date().toISOString();
+    writeJson(manifestPath, manifest);
+  }
+  const active = fs.existsSync(activePath) ? readJson(activePath) : null;
+  let released = false;
+  if (active && active.unitId === manifest.unitId) {
+    writeJson(path.join(stateDir, 'last-run.json'), {
+      unitId: manifest.unitId,
+      outcome: manifest.outcome,
+      closedAt: manifest.closedAt,
+      pr: manifest.pr && manifest.pr.url ? { url: manifest.pr.url } : null,
+      manifest: relManifest,
+    });
+    fs.unlinkSync(activePath);
+    released = true;
+  }
+  return { alreadyClosed, released };
+}
+
 const [, , cmd, ...args] = process.argv;
 
 if (cmd === 'init') {
@@ -74,12 +107,40 @@ if (cmd === 'init') {
   const configPath = path.join(cwd, '.olympus', 'config.json');
   if (!fs.existsSync(configPath)) die('.olympus/config.json not found in this project');
   const config = readJson(configPath);
+  // Starting a different unit is a deliberate act: an unclosed prior active
+  // run is closed as superseded, never silently orphaned.
+  let superseded = null;
+  if (fs.existsSync(activePath)) {
+    let prior = null;
+    try {
+      prior = readJson(activePath);
+    } catch (e) {
+      // A torn pointer must not block init — treat it as absent; the
+      // rewrite at the end of init replaces it.
+    }
+    if (prior && prior.unitId !== unitId) {
+      const priorPath = path.isAbsolute(prior.manifest) ? prior.manifest : path.join(cwd, prior.manifest);
+      if (fs.existsSync(priorPath)) {
+        let pm = null;
+        try {
+          pm = readJson(priorPath);
+        } catch (e) {
+          // torn manifest: nothing to supersede
+        }
+        if (pm && !(pm.phase === 'done' && pm.closedAt)) {
+          superseded = { unitId: pm.unitId, phase: pm.phase };
+          closeRun(pm, priorPath, prior.manifest, 'superseded');
+        }
+      }
+    }
+  }
   const safeId = unitId.replace(/[^a-zA-Z0-9._-]/g, '-');
   const relManifest = path.join('.olympus', 'state', 'runs', safeId, 'manifest.json');
   const manifestPath = path.join(cwd, relManifest);
 
   let manifest;
-  if (fs.existsSync(manifestPath)) {
+  const resumed = fs.existsSync(manifestPath);
+  if (resumed) {
     manifest = readJson(manifestPath); // re-entrancy: resume, never overwrite
   } else {
     manifest = {
@@ -110,9 +171,20 @@ if (cmd === 'init') {
   }
   writeJson(activePath, { unitId, manifest: relManifest.replace(/\\/g, '/') });
   process.stdout.write(
-    JSON.stringify({ ok: true, resumed: manifest.steps && Object.keys(manifest.steps).length > 0, manifest, keys: keysOf(manifest) })
+    JSON.stringify({ ok: true, resumed, superseded, manifest, keys: keysOf(manifest) })
   );
 } else if (cmd === 'get') {
+  if (!fs.existsSync(activePath)) {
+    const lastPath = path.join(stateDir, 'last-run.json');
+    let lastCompleted = null;
+    try {
+      lastCompleted = fs.existsSync(lastPath) ? readJson(lastPath) : null;
+    } catch (e) {
+      // a torn last-run.json reads as "no record"
+    }
+    process.stdout.write(JSON.stringify({ ok: false, error: 'no active run', lastCompleted }));
+    process.exit(1);
+  }
   const { manifest } = loadActiveManifest();
   process.stdout.write(JSON.stringify({ ok: true, manifest, keys: keysOf(manifest) }));
 } else if (cmd === 'merge') {
@@ -275,6 +347,62 @@ if (cmd === 'init') {
   } catch (e) {
     die(`state commit failed: ${e.message}`);
   }
+} else if (cmd === 'close') {
+  const OUTCOMES = ['shipped', 'abandoned', 'superseded'];
+  const oi = args.indexOf('--outcome');
+  const outcome = oi >= 0 ? args[oi + 1] : 'shipped';
+  if (!OUTCOMES.includes(outcome)) die(`invalid outcome "${outcome}" — expected one of: ${OUTCOMES.join(', ')}`);
+  const unitArg = args.filter((a, i) => oi < 0 || (i !== oi && i !== oi + 1))[0] || null;
+
+  let manifest, manifestPath, relManifest;
+  if (unitArg) {
+    const safeId = unitArg.replace(/[^a-zA-Z0-9._-]/g, '-');
+    relManifest = path.join('.olympus', 'state', 'runs', safeId, 'manifest.json').replace(/\\/g, '/');
+    manifestPath = path.join(cwd, relManifest);
+    if (!fs.existsSync(manifestPath)) die(`no run manifest for unit: ${unitArg}`);
+    manifest = readJson(manifestPath);
+  } else {
+    if (!fs.existsSync(activePath)) die('no active run (.olympus/state/active-run.json missing)');
+    relManifest = readJson(activePath).manifest;
+    ({ manifest, manifestPath } = loadActiveManifest());
+  }
+
+  const res = closeRun(manifest, manifestPath, relManifest, outcome);
+  process.stdout.write(
+    JSON.stringify({ ok: true, closed: manifest.unitId, outcome: manifest.outcome, alreadyClosed: res.alreadyClosed, released: res.released })
+  );
+} else if (cmd === 'list') {
+  const runsDir = path.join(stateDir, 'runs');
+  let active = null;
+  try {
+    active = fs.existsSync(activePath) ? readJson(activePath) : null;
+  } catch (e) {
+    // a torn pointer lists every run as inactive rather than dying
+  }
+  const runs = [];
+  if (fs.existsSync(runsDir)) {
+    for (const entry of fs.readdirSync(runsDir)) {
+      const mp = path.join(runsDir, entry, 'manifest.json');
+      if (!fs.existsSync(mp)) continue;
+      let m;
+      try {
+        m = readJson(mp);
+      } catch (e) {
+        continue; // a torn manifest must not kill the listing
+      }
+      runs.push({
+        unitId: m.unitId,
+        createdAt: m.createdAt || null,
+        phase: m.phase || null,
+        outcome: m.outcome || null,
+        closedAt: m.closedAt || null,
+        pr: (m.pr && m.pr.url) || null,
+        active: !!active && active.unitId === m.unitId,
+      });
+    }
+  }
+  runs.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  process.stdout.write(JSON.stringify({ ok: true, runs }));
 } else {
-  die(`unknown command: ${cmd || '(none)'} — expected init|get|merge|step|sidecar|resync|learn|version|commit`);
+  die(`unknown command: ${cmd || '(none)'} — expected init|get|list|merge|step|sidecar|resync|learn|close|version|commit`);
 }

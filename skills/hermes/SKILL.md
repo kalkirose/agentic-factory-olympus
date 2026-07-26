@@ -47,8 +47,9 @@ Silence means working. You speak at exactly three moments:
 - **Escalations** — immediately, always.
 - **On-demand status** — when asked, answer in two lines from the manifest:
   run `node <plugin-root>/bin/olympus-state.js get` in the project
-  directory and summarize `phase`, `steps`, and pass outcomes. Nothing
-  else; no project files.
+  directory and summarize `phase`, `steps`, and pass outcomes. When it
+  reports no active run, answer in one line from its `lastCompleted` field
+  (unit, outcome, PR). Nothing else; no project files.
 
 ## Liveness (hard rules — never wait for a timeout)
 

@@ -6,7 +6,8 @@ Each project the harness runs in carries an `.olympus/` directory:
 .olympus/
   config.json          committed — the project's answers, one reviewable file
   state/               committed — run manifests, learnings, verdicts
-    active-run.json    which run is live
+    active-run.json    which run is live (absent between runs)
+    last-run.json      the most recent closed run (unit, outcome, PR)
     runs/<unit>/       manifest.json, learnings.md, traceability.md, verdict-pass-N.json
 ```
 

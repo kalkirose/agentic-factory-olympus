@@ -80,7 +80,7 @@ async function getState(phaseName) {
   }
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
-const MIN_STATE_VERSION = '0.2.0'
+const MIN_STATE_VERSION = '0.4.0'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -178,6 +178,9 @@ await talos(`olympus-state merge ${esc({ pr: { url: hebe.url, checks: hebe.check
 const failing = hebe.checks.filter((c) => c.status !== 'pass')
 if (failing.length === 0 && hebe.needsHuman.length === 0) {
   await talos(`olympus-state step ship done ${esc({ url: hebe.url })}`, 'talos:step', 'Ship')
+  // The done seam is the run's terminal transition; a failed close relay is
+  // repairable later via `olympus-state close`, so it never blocks the seam.
+  await talosSoft('olympus-state close --outcome shipped', 'talos:close', 'Ship')
   return {
     status: 'done',
     seam: 'atropos',
