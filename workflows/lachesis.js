@@ -1,15 +1,13 @@
 export const meta = {
   name: 'lachesis',
-  description: 'Lachesis (build): the dev loop. Fresh passes against the frozen suite until 3 greens or 6 passes. Official verdict = deterministic Tier-1 gates + evidence-verified Fury findings; Minos picks the winner.',
+  description: 'Lachesis (build): the dev loop. Fresh passes against the frozen suite until the configured green target or pass budget. Official verdict = deterministic Tier-1 gates + evidence-verified Fury findings; Minos picks the winner.',
   whenToUse: 'Second phase of an Olympus run. Requires a frozen suite from Clotho.',
   phases: [
     { title: 'Build loop', detail: 'fresh Hephaestus per pass; Tier-1 verdict + Furies + verification; Mentor between passes' },
-    { title: 'Judge', detail: 'Minos scores green branches independently and picks' },
+    { title: 'Judge', detail: 'Minos scores green branches when more than one exists; a sole green is adopted mechanically' },
   ],
 }
 
-const GREENS_TARGET = 3
-const MAX_PASSES = 6
 const MAX_CONTINUATIONS_PER_PASS = 2
 
 const TALOS_SCHEMA = {
@@ -73,7 +71,7 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
   }
 }
 
-// ---- Fable-seat dispatch: Minos runs claude-fable-5 by definition; when
+// ---- Fable-seat dispatch: Minos runs the fable model class by definition; when
 // that dispatch dies the -opus variant (same role, Opus-tuned prompt) takes
 // the seat, logged and recorded. Config models.fableSeats: 'auto' (default)
 // | 'opus' (variants directly) | 'fable' (never fall back).
@@ -112,7 +110,7 @@ async function getState(phaseName) {
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
 
-const MIN_STATE_VERSION = '0.2.0'
+const MIN_STATE_VERSION = '0.5.0'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -145,6 +143,19 @@ const manifest = state.output.manifest
 fableSeatPref = (manifest.models && manifest.models.fableSeats) || 'auto'
 const frozen = manifest.frozenTests
 if (!frozen || !frozen.sha) return escalate('lachesis:state', ['no frozen suite — run olympus:clotho first'])
+
+// Loop shape: per-invocation args override config (manifest.devRalph),
+// which overrides the 3-green/6-pass defaults. maxPasses is a hard attempt
+// budget independent of the target — target 1 leaves 2 spare attempts in a
+// budget of 3. A spent budget with zero greens escalates; a spent budget
+// with fewer greens than the target proceeds to the judge with what exists.
+const num = (v, d) => (v != null && Number.isFinite(Number(v)) ? Number(v) : d)
+const dr = manifest.devRalph || {}
+const greensTarget = Math.max(1, num(args && args.greensTarget, num(dr.greensTarget, 3)))
+const maxPassesRaw = num(args && args.maxPasses, num(dr.maxPasses, 6))
+const maxPasses = Math.max(greensTarget, maxPassesRaw)
+if (maxPasses !== maxPassesRaw) log(`maxPasses raised to greensTarget (${greensTarget}): a budget below the target cannot be satisfied`)
+if (args && (args.greensTarget != null || args.maxPasses != null)) log(`Loop overrides from args: greensTarget=${greensTarget}, maxPasses=${maxPasses}`)
 
 const unitId = manifest.unitId
 const safeId = unitId.replace(/[^a-zA-Z0-9._-]/g, '-')
@@ -224,7 +235,7 @@ const VERIFIER_SCHEMA = {
 
 function contextPackage(passN) {
   return (
-    `You are pass ${passN} of at most ${MAX_PASSES} for unit ${unitId}.\n` +
+    `You are pass ${passN} of at most ${maxPasses} for unit ${unitId}.\n` +
     `Validated spec: "${manifest.spec.path}".\n` +
     `Frozen suite: SHA ${frozen.sha}; paths: ${frozen.paths.join(', ')}.\n` +
     `Commands — layers: ${JSON.stringify(manifest.commands.fullSuite)}; typecheck: ${manifest.commands.typecheck || '(none)'}${manifest.commands.targetedHint ? `; targeted runs: ${manifest.commands.targetedHint}` : ''}.\n` +
@@ -306,7 +317,7 @@ async function runFuries(n, branch, onlyKeys) {
 
 // -------------------------------------------------------------- The Q4 loop
 let greens = passes.filter((p) => p.outcome === 'green').length
-while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
+while (greens < greensTarget && passes.length < maxPasses) {
   const n = passes.length + 1
   const branch = `${baseBranch}-pass-${n}`
 
@@ -405,9 +416,9 @@ while (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
     const failedNames = (verdict.checks || []).filter((c) => !c.ok).map((c) => c.name).join(', ')
     await talosSoft(`olympus-state learn ${esc(`Pass ${n} did not go green (${outcome}; failing: ${failedNames || 'n/a'}) — fix hypotheses recorded this pass are refuted by the verdict.`)} --status refuted`, `talos:promote-${n}`, 'Build loop')
   }
-  log(`Pass ${n}: ${outcome} (${greens}/${GREENS_TARGET} green, ${passes.length}/${MAX_PASSES} passes)`)
+  log(`Pass ${n}: ${outcome} (${greens}/${greensTarget} green, ${passes.length}/${maxPasses} passes)`)
 
-  if (greens < GREENS_TARGET && passes.length < MAX_PASSES) {
+  if (greens < greensTarget && passes.length < maxPasses) {
     const mentor = await seat(
       `Between-pass check for unit ${unitId}. Learnings file: "${manifest.learningsPath}". ` +
         `Run state: ${JSON.stringify(passes.map((p) => ({ n: p.n, outcome: p.outcome, failed: p.verdict && p.verdict.failed })))}.\n` +
@@ -451,30 +462,44 @@ const MINOS_SCHEMA = {
   },
   required: ['scores', 'winner', 'rationale'],
 }
-const minos = await seatAgent('minos',
-  `Judge the green candidates for unit ${unitId}. Spec: "${manifest.spec.path}". ` +
-    `Frozen base SHA: ${frozen.sha}. Candidates (in pass order — score strictly one at a time, in this order): ${greenBranches.join(', ')}.\n` +
-    `Read each candidate's diff with: git diff ${frozen.sha}..<branch>. Follow the isolation protocol and rubric in your definition. ` +
-    `Tie goes to the later pass.`,
-  { schema: MINOS_SCHEMA, label: 'minos:judge', phase: 'Judge', effort: 'xhigh' }
-)
-if (!minos || !greenBranches.includes(minos.winner)) {
-  return escalate('lachesis:judge', ['Minos (judge) failed to return a valid pick'], { candidates: greenBranches })
+let winner, judgeScores, judgeRationale
+if (greenBranches.length === 1) {
+  // A single green candidate needs no judging: comparison is the seat's
+  // whole job, and the candidate already cleared the Tier-1 verdict and
+  // the verified Fury gates inside its pass.
+  winner = greenBranches[0]
+  judgeScores = [{ branch: winner, total: 0, evidence: ['sole green candidate — no comparison performed'] }]
+  judgeRationale = 'sole green candidate; pass-level gates (Tier-1 verdict + verified Fury findings) are the quality bar'
+  log(`Judge: single green candidate ${winner} — Minos seat skipped`)
+} else {
+  const minos = await seatAgent('minos',
+    `Judge the green candidates for unit ${unitId}. Spec: "${manifest.spec.path}". ` +
+      `Frozen base SHA: ${frozen.sha}. Candidates (in pass order — score strictly one at a time, in this order): ${greenBranches.join(', ')}.\n` +
+      `Read each candidate's diff with: git diff ${frozen.sha}..<branch>. Follow the isolation protocol and rubric in your definition. ` +
+      `Tie goes to the later pass.`,
+    { schema: MINOS_SCHEMA, label: 'minos:judge', phase: 'Judge', effort: 'xhigh' }
+  )
+  if (!minos || !greenBranches.includes(minos.winner)) {
+    return escalate('lachesis:judge', ['Minos (judge) failed to return a valid pick'], { candidates: greenBranches })
+  }
+  winner = minos.winner
+  judgeScores = minos.scores
+  judgeRationale = minos.rationale
 }
 
-const co = await talos(`olympus-branch checkout --name "${minos.winner}"`, 'talos:checkout-winner', 'Judge')
+const co = await talos(`olympus-branch checkout --name "${winner}"`, 'talos:checkout-winner', 'Judge')
 if (!co.ok) return escalate('lachesis:state', [`could not check out winner: ${co.errorTail || JSON.stringify(co.output)}`])
 // The post-judge prune: the one moment branches are deleted, and every
 // delete leaves a discarded ref (docs/adr/0005). All non-winner pass
 // branches go, failed passes included.
 for (const b of passes.map((p) => p.branch)) {
-  if (b !== minos.winner) await talosSoft(`olympus-branch delete --name "${b}"`, 'talos:prune', 'Judge')
+  if (b !== winner) await talosSoft(`olympus-branch delete --name "${b}"`, 'talos:prune', 'Judge')
 }
 await talos(
-  `olympus-state merge ${esc({ judge: { winner: minos.winner, scores: minos.scores, rationale: minos.rationale }, phase: 'atropos' })}`,
+  `olympus-state merge ${esc({ judge: { winner, scores: judgeScores, rationale: judgeRationale }, phase: 'atropos' })}`,
   'talos:judge-record', 'Judge'
 )
-await talos(`olympus-state step judge done ${esc({ winner: minos.winner })}`, 'talos:step-judge-end', 'Judge')
+await talos(`olympus-state step judge done ${esc({ winner })}`, 'talos:step-judge-end', 'Judge')
 
 return {
   status: 'done',
@@ -482,8 +507,8 @@ return {
   unit: unitId,
   greens,
   passesRun: passes.length,
-  winner: minos.winner,
-  judgeRationale: minos.rationale,
+  winner,
+  judgeRationale,
   flaggedDecisions: passes.flatMap((p) => p.flaggedDecisions || []),
   escalations: [],
 }

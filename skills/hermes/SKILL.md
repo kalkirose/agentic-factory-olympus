@@ -20,6 +20,11 @@ order, each gated on the previous seam:
 2. `Workflow({ name: "olympus:lachesis" })`
 3. `Workflow({ name: "olympus:atropos" })`
 
+When the user asks for a non-default loop shape for one run (e.g. "single
+test suite", "stop at first green"), pass overrides through `args` instead
+of editing config: `olympus:clotho` takes `args.testPasses`;
+`olympus:lachesis` takes `args.greensTarget` and `args.maxPasses`.
+
 Every workflow returns `{ status, seam, escalations, ... }`.
 
 - `status: "done"` → report the seam result (one short message, see

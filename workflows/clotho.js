@@ -84,7 +84,7 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
 }
 
 // ---- Fable-seat dispatch: the judgment seats (cassandra, daedalus, minos)
-// run claude-fable-5 by definition. When that dispatch dies (model
+// run the fable model class by definition. When that dispatch dies (model
 // unavailable, terminal API error) the -opus variant — same role, prompt
 // re-tuned for Opus 4.8 — takes the seat, logged and recorded in learnings.
 // Config models.fableSeats: 'auto' (default: try fable, fall back) |
@@ -374,8 +374,37 @@ async function killSweep(suite, label) {
 }
 
 let frozen = manifest.frozenTests
-const tr = manifest.testRalph || { passes: 1, adversaryCount: 0, refinementRounds: 0 }
+const trBase = manifest.testRalph || { passes: 1, adversaryCount: 0, refinementRounds: 0 }
+const num = (v, d) => (v != null && Number.isFinite(Number(v)) ? Number(v) : d)
+// Per-invocation override: a single run can take a different suite count
+// (e.g. one authored suite) without editing tracked config.
+const tr = args && args.testPasses != null ? { ...trBase, passes: Math.max(1, num(args.testPasses, trBase.passes)) } : trBase
+if (args && args.testPasses != null) log(`Test-loop override from args: passes=${tr.passes}`)
 const adversaryDir = `${runDir}/adversary`
+
+// Survivor-driven strengthening, shared by both suite shapes: each round
+// sends the surviving adversary faults back to the test author, re-freezes,
+// re-sweeps, and records the new kill rate. A clean sweep ends it early.
+async function refineAgainstSurvivors(suite, survivors) {
+  for (let round = 1; round <= (tr.refinementRounds || 0) && survivors.length; round++) {
+    log(`Refinement round ${round}: strengthening against survivors ${survivors.join(', ')}`)
+    const refined = await seatAgent('daedalus',
+      `REFINEMENT ROUND ${round} for the suite of unit ${iris.unitId} (files: ${suite.testFiles.join(', ')}).\n` +
+        `These adversary implementations under "${adversaryDir}" SURVIVED the suite: ${survivors.join(', ')}. ` +
+        `Read each survivor's fault (their manifest entries are in the run manifest step "adversary"), and strengthen the suite ` +
+        `to kill exactly those faults — from the SPEC's language, not from the wrong code's shape. Update the matrix. ` +
+        `Spec: "${iris.specPath}". Do not weaken or remove existing tests. Do not commit.`,
+      { schema: DAEDALUS_SCHEMA, label: `daedalus:refine-${round}`, phase: 'Tests', effort: 'xhigh' }
+    )
+    if (!refined) break
+    suite = refined
+    await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, `talos:refreeze-${round}`, 'Tests')
+    const sweep = await killSweep(suite, `refine-${round}`)
+    survivors = sweep ? sweep.survivors : []
+    await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep ? sweep.killRate : 'unmeasured', survivors } })}`, 'talos:kill-record', 'Tests')
+  }
+  return { suite, survivors }
+}
 
 if (!frozen) {
   // Adversary set: generated once, reused across every candidate suite.
@@ -392,16 +421,23 @@ if (!frozen) {
   }
 
   if (tr.passes <= 1) {
-    // Single-pass shape (config-reachable alternative to the tournament).
+    // Single-suite shape (config-reachable alternative to the tournament).
+    // Quality bar: Argus validation, then the adversary sweep with
+    // survivor-driven refinement — measured blind spots are closed before
+    // the freeze, not just recorded.
     const r = await authorAndValidate('author', `Work on the current branch (${baseBranch}).\n`)
     if (r.error) return r.error
-    const sweep = await killSweep(r.suite, 'single')
-    if (sweep) await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep.killRate, survivors: sweep.survivors } })}`, 'talos:kill-record', 'Tests')
+    let suite = r.suite
+    let sweep = await killSweep(suite, 'single')
+    let survivors = sweep ? sweep.survivors : []
+    if (sweep) await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep.killRate, survivors } })}`, 'talos:kill-record', 'Tests')
+    if (survivors.length) ({ suite, survivors } = await refineAgainstSurvivors(suite, survivors))
     phase('Freeze')
-    const fr = await talos(`olympus-freeze --paths "${r.suite.testFiles.concat([r.suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')
+    const fr = await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')
     if (!fr.ok) return escalate('clotho:state', [`freeze failed: ${fr.errorTail || JSON.stringify(fr.output)}`])
     frozen = fr.output.frozenTests
-    await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha })}`, 'talos:step', 'Freeze')
+    await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha, survivorsAtFreeze: survivors })}`, 'talos:step', 'Freeze')
+    if (survivors.length) log(`Frozen with ${survivors.length} surviving adversary implementation(s) — recorded for the eval ledger`)
   } else {
     // Test tournament: P candidate suites on branches, judged, refined, frozen.
     const candidates = []
@@ -451,25 +487,9 @@ if (!frozen) {
 
     // Bounded refinement against exactly the wrong implementations the
     // winner failed to kill, then freeze.
-    let survivors = winner.survivors
     let suite = winner.suite
-    for (let round = 1; round <= (tr.refinementRounds || 0) && survivors.length; round++) {
-      log(`Refinement round ${round}: strengthening against survivors ${survivors.join(', ')}`)
-      const refined = await seatAgent('daedalus',
-        `REFINEMENT ROUND ${round} for the winning suite of unit ${iris.unitId} (files: ${suite.testFiles.join(', ')}).\n` +
-          `These adversary implementations under "${adversaryDir}" SURVIVED the suite: ${survivors.join(', ')}. ` +
-          `Read each survivor's fault (their manifest entries are in the run manifest step "adversary"), and strengthen the suite ` +
-          `to kill exactly those faults — from the SPEC's language, not from the wrong code's shape. Update the matrix. ` +
-          `Spec: "${iris.specPath}". Do not weaken or remove existing tests. Do not commit.`,
-        { schema: DAEDALUS_SCHEMA, label: `daedalus:refine-${round}`, phase: 'Tests', effort: 'xhigh' }
-      )
-      if (!refined) break
-      suite = refined
-      await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, `talos:refreeze-${round}`, 'Tests')
-      const sweep = await killSweep(suite, `refine-${round}`)
-      survivors = sweep ? sweep.survivors : []
-      await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep ? sweep.killRate : 'unmeasured', survivors } })}`, 'talos:kill-record', 'Tests')
-    }
+    let survivors = winner.survivors
+    if (survivors.length) ({ suite, survivors } = await refineAgainstSurvivors(suite, survivors))
 
     phase('Freeze')
     const fr = await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')

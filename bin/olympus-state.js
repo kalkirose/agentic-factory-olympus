@@ -158,6 +158,7 @@ if (cmd === 'init') {
       infraFlakeSignatures: config.infraFlakeSignatures || [],
       uiPathPatterns: config.uiPathPatterns || [],
       testRalph: config.testRalph || null,
+      devRalph: config.devRalph || null,
       models: config.models || null,
       learningsPath: path
         .join('.olympus', 'state', 'runs', safeId, 'learnings.md')
@@ -265,7 +266,7 @@ if (cmd === 'init') {
   const config = readJson(configPath);
   const { manifest, manifestPath } = loadActiveManifest();
   const refreshed = [];
-  for (const key of ['commands', 'budget', 'hooks', 'conventions', 'docPaths', 'infraFlakeSignatures', 'uiPathPatterns', 'testRalph', 'models']) {
+  for (const key of ['commands', 'budget', 'hooks', 'conventions', 'docPaths', 'infraFlakeSignatures', 'uiPathPatterns', 'testRalph', 'devRalph', 'models']) {
     if (config[key] !== undefined && JSON.stringify(manifest[key]) !== JSON.stringify(config[key])) {
       manifest[key] = config[key];
       refreshed.push(key);

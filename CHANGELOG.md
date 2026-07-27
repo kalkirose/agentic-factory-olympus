@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — 2026-07-27
+
+- lachesis: dev-loop shape is config/args-driven — `devRalph: { greensTarget, maxPasses }` (defaults 3/6), per-run `args.greensTarget`/`args.maxPasses`; `maxPasses` is a hard attempt budget; a sole green candidate skips the Minos seat and records the judge pick mechanically (pass-level Tier-1 + Fury gates remain the quality bar); MIN_STATE_VERSION 0.5.0
+- clotho: per-run `args.testPasses` overrides `testRalph.passes`; the single-suite shape runs the survivor-driven refinement rounds before freeze (shared helper with the tournament path)
+- olympus-state: `init` copies `devRalph` into the manifest; `resync` refreshes it
+- agents: every seat declares its model class (opus / fable / sonnet) instead of a pinned ID — seats track the newest model of their class (docs/adr/0003)
+- config example + README document `devRalph` and the per-run overrides; hermes documents passing them through workflow args
+
 ## 0.4.0 — 2026-07-26
 
 - olympus-state: `close [<unitId>] [--outcome shipped|abandoned|superseded]` stamps terminal state (`phase: done`, `outcome`, `closedAt`) into the run manifest and, for the active run, records `last-run.json` and deletes `active-run.json`; `list` prints every run with phase/outcome/active flag; `get` with no active run reports `lastCompleted`; `init <newUnit>` closes an unclosed prior active run as `superseded` and reports it in its output

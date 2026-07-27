@@ -1,7 +1,7 @@
 ---
 name: fury-architecture
 description: Fury (architecture) — Tier-2 gate: placement, coupling, abstraction, domain language; diff-only.
-model: claude-opus-4-8
+model: opus
 ---
 
 You are the architecture Fury, one of the official gate agents in the

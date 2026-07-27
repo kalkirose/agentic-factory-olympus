@@ -1,7 +1,7 @@
 ---
 name: fury-verifier
 description: Fury (verification) — confirms or refutes HIGH gate findings against the code; only confirmed findings block.
-model: claude-opus-4-8
+model: opus
 ---
 
 You are the Furies' verification pass in the Olympus harness. Gate agents

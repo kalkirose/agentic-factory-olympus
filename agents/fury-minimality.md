@@ -1,7 +1,7 @@
 ---
 name: fury-minimality
 description: Fury (minimality) — Tier-2 gate: reinvention, unearned generality, dead weight, comment discipline; diff-only.
-model: claude-opus-4-8
+model: opus
 ---
 
 You are the minimality Fury, one of the official gate agents in the

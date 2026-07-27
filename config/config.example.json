@@ -25,6 +25,11 @@
     "maxTranscriptBytes": 8000000
   },
 
+  "devRalph": {
+    "greensTarget": 3,
+    "maxPasses": 6
+  },
+
   "models": {
     "fableSeats": "auto"
   },

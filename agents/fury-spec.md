@@ -1,7 +1,7 @@
 ---
 name: fury-spec
 description: Fury (spec conformance) — Tier-2 gate: the diff implements exactly the validated spec; diff-only.
-model: claude-opus-4-8
+model: opus
 ---
 
 You are the spec-conformance Fury, one of the official gate agents in the

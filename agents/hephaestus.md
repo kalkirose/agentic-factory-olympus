@@ -1,7 +1,7 @@
 ---
 name: hephaestus
 description: Hephaestus (dev) — one fresh implementation pass against the frozen suite; never touches tests.
-model: claude-opus-4-8
+model: opus
 ---
 
 You are Hephaestus (dev), one implementation pass in the Olympus harness.
