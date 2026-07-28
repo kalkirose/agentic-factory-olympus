@@ -1,9 +1,10 @@
 export const meta = {
   name: 'clotho',
-  description: 'Clotho (spec + tests): readiness, spec validation, test authoring, red-state check, freeze',
+  description: 'Clotho (spec + tests): readiness, distillation, spec validation, test authoring, red-state check, freeze',
   whenToUse: 'First phase of an Olympus run. Produces a validated spec and a frozen acceptance suite at a SHA.',
   phases: [
     { title: 'Readiness', detail: 'Iris: next unit + prerequisites' },
+    { title: 'Distill', detail: 'Themis: ground the spec to the codebase; intent decisions escalate' },
     { title: 'Spec', detail: 'Cassandra: drift + intrinsic validation' },
     { title: 'Tests', detail: 'Daedalus authors, red-state runs, Argus validates' },
     { title: 'Freeze', detail: 'suite committed, SHA recorded' },
@@ -58,7 +59,7 @@ async function seat(prompt, opts) {
   }
   return null
 }
-const MIN_STATE_VERSION = '0.2.0'
+const MIN_STATE_VERSION = '0.6.0'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -193,6 +194,71 @@ if (!steps['branch'] || steps['branch'].status !== 'done') {
   await talos(`olympus-state merge ${esc({ spec: { path: iris.specPath || null } })}`, 'talos:merge', 'Readiness')
 }
 
+const runDir = `.olympus/state/runs/${iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-')}`
+
+// ------------------------------------------------------------------ Distill
+phase('Distill')
+const THEMIS_SCHEMA = {
+  type: 'object',
+  properties: {
+    claimsResolved: { type: 'number' },
+    claimTablePath: { type: 'string' },
+    intentContractPath: { type: 'string' },
+    specCommit: { type: 'string' },
+    summary: { type: 'string' },
+    decisions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          question: { type: 'string' },
+          options: { type: 'string' },
+          context: { type: 'string' },
+        },
+        required: ['id', 'question', 'options'],
+      },
+    },
+  },
+  required: ['claimsResolved', 'claimTablePath', 'intentContractPath', 'decisions', 'summary'],
+}
+const distillDecisions = args && args.distillDecisions ? String(args.distillDecisions) : null
+const specSignoff = !!(args && args.specSignoff === true)
+const specValidated = !!(steps['spec-validation'] && steps['spec-validation'].status === 'done')
+let distillClaims = (steps['distill'] && steps['distill'].claimsResolved) || 0
+// Distill runs only while spec validation is still open: a run resumed past
+// that gate must never take a late spec rewrite under an authored or frozen
+// suite. args.specSignoff re-runs Distill so a human-signed spec revision is
+// re-grounded (fresh intent contract + claim table) before Cassandra
+// re-validates.
+if (!specValidated && (specSignoff || !steps['distill'] || steps['distill'].status !== 'done')) {
+  await talos('olympus-state step distill started', 'talos:step', 'Distill')
+  const themis = await seat(
+    `Distill the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}) per your definition.\n` +
+      `Write intent-contract.md and claim-table.md under "${runDir}".\n` +
+      (distillDecisions ? `HUMAN DECISIONS for the open decision list — apply them, then complete the auto path:\n${distillDecisions}\n` : '') +
+      `Doc pointers: .olympus/config.json under docPaths.`,
+    { agentType: 'olympus:themis', schema: THEMIS_SCHEMA, label: 'themis:distill', phase: 'Distill', effort: 'xhigh' }
+  )
+  if (!themis) return escalate('clotho:seat', ['Themis (distill) returned nothing after a retry — re-run olympus:clotho to resume'])
+  if (themis.decisions && themis.decisions.length) {
+    await talos(`olympus-state step distill escalated ${esc({ decisions: themis.decisions.length })}`, 'talos:step', 'Distill')
+    return escalate(
+      'clotho:distill',
+      themis.decisions.map((d) => `DECISION ${d.id}: ${d.question} — options: ${d.options}${d.context ? ` (${d.context})` : ''}`),
+      {
+        unit: iris.unitId,
+        intentContract: themis.intentContractPath,
+        claimTable: themis.claimTablePath,
+        instruction: 'Collect the human answers, then re-run olympus:clotho with args.distillDecisions carrying them verbatim per DECISION id.',
+      }
+    )
+  }
+  await talos(`olympus-state step distill done ${esc({ claimsResolved: themis.claimsResolved, specCommit: themis.specCommit || '' })}`, 'talos:step', 'Distill')
+  distillClaims = themis.claimsResolved
+  log(`Distilled: ${themis.claimsResolved} claims auto-resolved, 0 decisions — proceeding`)
+}
+
 // --------------------------------------------------------------------- Spec
 phase('Spec')
 const CASSANDRA_SCHEMA = {
@@ -217,22 +283,39 @@ const CASSANDRA_SCHEMA = {
 }
 let cassandra = null
 if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
-  const findingsPath = `.olympus/state/runs/${iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-')}/spec-findings.md`
-  await talos('olympus-state step spec-validation started', 'talos:step', 'Spec')
+  const findingsPath = `${runDir}/spec-findings.md`
+  // Round cap: the spec gate gets 2 automatic validation rounds per unit;
+  // only a human-signed spec revision (args.specSignoff) resets the budget.
+  const prevRounds = (steps['spec-validation'] && steps['spec-validation'].rounds) || 0
+  let effectivePrev = prevRounds
+  if (specSignoff) {
+    effectivePrev = 0
+    log('args.specSignoff: human-signed spec revision resets the round budget')
+  }
+  if (effectivePrev >= 2) {
+    return escalate('clotho:spec', ['spec gate exhausted its 2 rounds for this unit — human-signed spec revision required; re-run with args.specSignoff true after sign-off'], { unit: iris.unitId, rounds: effectivePrev })
+  }
+  // A sign-off reset is persisted with the started write so a crash before
+  // the verdict cannot resurrect the stored round count on the next resume.
+  await talos(`olympus-state step spec-validation started${specSignoff ? ` ${esc({ rounds: 0 })}` : ''}`, 'talos:step', 'Spec')
   cassandra = await seatAgent('cassandra',
     `Validate the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}).\n` +
       `Doc pointers live in .olympus/config.json under docPaths — retrieve on demand.\n` +
-      `Write your findings file to "${findingsPath}". Run all three checks from your definition.`,
+      `Write your findings file to "${findingsPath}". Run all the checks from your definition.\n` +
+      `Distillation artifacts under "${runDir}" (intent-contract.md, claim-table.md) if present: verify INTENT FIDELITY (the spec must preserve every contract item; drift is a REVISION); claims already verified in the claim table need only spot-checks.`,
     { schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
   )
   if (!cassandra) return escalate('clotho:seat', ['Cassandra (spec) returned nothing after retry and fallback — re-run olympus:clotho to resume'])
   const hard = cassandra.findings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'REVISION')
   if (cassandra.verdict === 'blocked' || hard.length > 0) {
-    await talos(`olympus-state step spec-validation escalated ${esc({ findingsPath: cassandra.findingsPath })}`, 'talos:step', 'Spec')
+    const rounds = effectivePrev + 1
+    await talos(`olympus-state step spec-validation escalated ${esc({ findingsPath: cassandra.findingsPath, rounds })}`, 'talos:step', 'Spec')
+    const items = hard.map((f) => `${f.severity}: ${f.summary} (${f.evidence})`)
+    if (rounds >= 2) items.unshift('SPEC GATE NOT CONVERGING: round 2 of 2 — no further automatic validation passes; revise the spec with human sign-off, then re-run with args.specSignoff true.')
     return escalate(
       'clotho:spec',
-      hard.map((f) => `${f.severity}: ${f.summary} (${f.evidence})`),
-      { findingsPath: cassandra.findingsPath, unit: iris.unitId }
+      items,
+      { findingsPath: cassandra.findingsPath, unit: iris.unitId, rounds }
     )
   }
   await talos(`olympus-state step spec-validation done ${esc({ findingsPath: cassandra.findingsPath, notes: cassandra.findings.length })}`, 'talos:step', 'Spec')
@@ -240,7 +323,6 @@ if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
 
 // -------------------------------------------------------------------- Tests
 phase('Tests')
-const runDir = `.olympus/state/runs/${iris.unitId.replace(/[^a-zA-Z0-9._-]/g, '-')}`
 const matrixPath = `${runDir}/traceability.md`
 const DAEDALUS_SCHEMA = {
   type: 'object',
@@ -319,20 +401,34 @@ async function authorAndValidate(passLabel, extraPrompt) {
   let argusFindings = null
   for (let round = 1; round <= 2; round++) {
     await talos('olympus-state step test-author started', 'talos:step', 'Tests')
-    suite = await seatAgent('daedalus',
-      `Author the acceptance suite for unit ${iris.unitId} from the validated spec at "${iris.specPath}".\n` +
-        `Cassandra's findings file: "${(cassandra && cassandra.findingsPath) || (steps['spec-validation'] && steps['spec-validation'].findingsPath) || 'none'}" — read the NOTEs.\n` +
-        `Test commands and conventions: .olympus/config.json (commands, docPaths.conventions).\n` +
-        `Write the traceability matrix to "${matrixPath}".\n` +
-        (extraPrompt || '') +
-        (argusFindings ? `REPAIR ROUND: the validator blocked the previous suite. Fix exactly these findings:\n${argusFindings}\n` : '') +
-        `Append a distilled learnings entry to "${manifest.learningsPath}" when you are done (test-authoring discipline: what constrained well, what was hard to express, spec gaps).\n` +
-        `Do not commit; the harness owns commits.`,
-      { schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
-    )
-    if (!suite) return { error: escalate('clotho:seat', ['Daedalus (tests) returned nothing after retry and fallback — re-run olympus:clotho to resume']) }
+    // A completed authoring survives a torn manifest via the authoredSuite
+    // record: reuse skips only the Daedalus dispatch — red-state and Argus
+    // still gate the reused suite.
+    const recorded = manifest.authoredSuite
+    if (round === 1 && !argusFindings && recorded && recorded.label === passLabel && Array.isArray(recorded.files) && recorded.files.length) {
+      suite = { testFiles: recorded.files, matrixPath: recorded.matrixPath, findings: [], deviations: [] }
+      log(`Reusing authored suite from the manifest for ${passLabel} (${recorded.files.length} files) — Daedalus dispatch skipped; red-state + Argus still gate it`)
+    } else {
+      suite = await seatAgent('daedalus',
+        `Author the acceptance suite for unit ${iris.unitId} from the validated spec at "${iris.specPath}".\n` +
+          `Cassandra's findings file: "${(cassandra && cassandra.findingsPath) || (steps['spec-validation'] && steps['spec-validation'].findingsPath) || 'none'}" — read the NOTEs.\n` +
+          `Test commands and conventions: .olympus/config.json (commands, docPaths.conventions).\n` +
+          `Write the traceability matrix to "${matrixPath}".\n` +
+          (extraPrompt || '') +
+          (argusFindings ? `REPAIR ROUND: the validator blocked the previous suite. Fix exactly these findings:\n${argusFindings}\n` : '') +
+          `Append a distilled learnings entry to "${manifest.learningsPath}" when you are done (test-authoring discipline: what constrained well, what was hard to express, spec gaps).\n` +
+          `Do not commit; the harness owns commits.`,
+        { schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
+      )
+      if (!suite) return { error: escalate('clotho:seat', ['Daedalus (tests) returned nothing after retry and fallback — re-run olympus:clotho to resume']) }
+      await talos(`olympus-state merge ${esc({ authoredSuite: { files: suite.testFiles, matrixPath: suite.matrixPath, label: passLabel } })}`, 'talos:authored-record', 'Tests')
+    }
 
-    const red = await talos('olympus-redstate', 'talos:redstate', 'Tests')
+    let red = await talos('olympus-redstate', 'talos:redstate', 'Tests')
+    if (!red.ok) {
+      log('red-state run failed to execute — one fresh relay retry')
+      red = await talos('olympus-redstate', 'talos:redstate-retry', 'Tests')
+    }
     if (!red.ok) return { error: escalate('clotho:environment', [`red-state run failed to execute: ${red.errorTail || JSON.stringify(red.output)}`]) }
 
     const argus = await seat(
@@ -509,6 +605,7 @@ return {
   seam: 'clotho',
   unit: { id: iris.unitId, title: iris.title, summary: iris.summary },
   branch: baseBranch,
+  distill: { claimsResolved: distillClaims },
   frozen: { sha: frozen.sha, paths: frozen.paths },
   escalations: [],
 }

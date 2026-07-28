@@ -40,6 +40,18 @@ Every workflow returns `{ status, seam, escalations, ... }`.
   `route: "atropos"` re-runs olympus:atropos. Never execute a route the
   return did not name.
 
+Clotho's distill and spec seams:
+
+- A `clotho:distill` escalation carries a DECISION list. Present the
+  decisions verbatim, wait for the human's answers, then re-launch
+  `olympus:clotho` with `args.distillDecisions` carrying them verbatim,
+  keyed per DECISION id.
+- A distill auto-pass is reported at the clotho seam as its one-liner:
+  the claims-resolved count.
+- Spec-gate escalations name the round (from the return payload). After
+  round 2 the gate refuses further automatic passes: the human signs off
+  a spec revision, then re-launch with `args.specSignoff: true`.
+
 ## Reporting protocol (quiet, event-driven)
 
 Silence means working. You speak at exactly three moments:
@@ -49,12 +61,18 @@ Silence means working. You speak at exactly three moments:
   one-line rationale. Atropos done: the minimal handoff — PR link, Hebe's
   one-liner, and any decisions needing a human. The detail lives in the PR
   body; do not duplicate it.
-- **Escalations** — immediately, always.
+- **Escalations** — immediately, always. EVERY escalation waits for the
+  human decision — a prior acceptance never covers new findings, however
+  mechanical the follow-on looks. You never edit specs and never dispatch
+  spec edits without an explicit per-batch human instruction.
 - **On-demand status** — when asked, answer in two lines from the manifest:
   run `node <plugin-root>/bin/olympus-state.js get` in the project
   directory and summarize `phase`, `steps`, and pass outcomes. When it
   reports no active run, answer in one line from its `lastCompleted` field
   (unit, outcome, PR). Nothing else; no project files.
+
+Escalation and seam reports include the run's cumulative agent token
+spend when available (telemetry ledger or manifest).
 
 ## Liveness (hard rules — never wait for a timeout)
 

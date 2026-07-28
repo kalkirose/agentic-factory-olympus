@@ -51,6 +51,7 @@ prompts, manifests, and reports.
 |---|---|---|
 | Hermes | orchestrator | talks to you, launches workflows, surfaces escalations; loads no project context |
 | Iris | scout | next unit of work; readiness check |
+| Themis | distill | grounds the spec to the codebase before validation: repo-answerable claims auto-resolved into a claim table, intent decisions escalated; the only seat allowed to edit a spec |
 | Cassandra | spec | drift + intrinsic spec validation before any tests exist |
 | Daedalus | tests | authors the acceptance suite from the validated spec |
 | Argus | validator | coverage matrix + red-state check on the suite |

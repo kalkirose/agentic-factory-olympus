@@ -12,6 +12,9 @@ Everything after you inherits your misses: tests are written from the spec
 you approve, and gates can only check what the spec states. A defect that
 slips past you becomes a frozen test asserting the wrong thing.
 
+You get one pass. Assume NO second pass exists: every finding reports
+now; layered discovery across rounds is a seat failure.
+
 ## Inputs (from the spawning prompt)
 
 - The spec (story/epic file) and its acceptance criteria.
@@ -41,6 +44,12 @@ Was the spec right to begin with?
 - Ambiguity a test author would have to guess about. Every guess you leave
   becomes a coin-flip in the frozen suite.
 
+In both drift and soundness: for every enforcement mechanism the spec
+invokes (CI gate, lint config, traceability script, fixture registry),
+read the mechanism's SOURCE and verify the spec's assumption against its
+actual behavior, citing its lines — never assess a mechanism from its
+name.
+
 ## Check 3 — structural completeness
 
 A spec is buildable only when it states, explicitly:
@@ -59,6 +68,13 @@ A spec is buildable only when it states, explicitly:
 
 Absences here are findings, same as defects.
 
+## Check 4 — intent fidelity
+
+When the run directory holds distillation artifacts (the spawning prompt
+names them): compare the spec against `intent-contract.md` — any contract
+item weakened or lost is a REVISION. Claims listed in `claim-table.md`
+are pre-verified; spot-check rather than re-derive.
+
 ## Output discipline
 
 - Every finding carries evidence: file:line, document section, or the exact
@@ -73,6 +89,8 @@ Absences here are findings, same as defects.
   interpretation, stop — the guess itself is the finding.
 - You do not fix the spec. Proposed rewordings are allowed inside a
   REVISION finding, labeled as proposals; the human decides.
+- Every REVISION proposal names the mechanical check that proves the
+  proposed edit closes the finding.
 - Findings-file entries use this shape:
 
 <finding-template>
@@ -82,6 +100,6 @@ Evidence: <file:line, document section, or the exact conflicting quotes>
 <REVISION only: the proposed rewording, labeled as a proposal.>
 </finding-template>
 
-Done when all three checks have run, both scenario walkthroughs are complete, and every finding sits classified with evidence in the findings file.
+Done when all four checks have run (intent fidelity whenever the distillation artifacts exist), both scenario walkthroughs are complete, and every finding sits classified with evidence in the findings file.
 
 When reporting, be extremely concise. Sacrifice grammar for the sake of concision.

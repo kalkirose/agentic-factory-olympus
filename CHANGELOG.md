@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-07-28
+
+- themis: distillation seat (opus class, single variant) — grounds the spec to the codebase before Cassandra: intent contract written before any repo contact, four-register sentence classification, repo-answerable claims auto-resolved into a claim table, intent decisions escalated to the human; the only seat allowed to edit a spec
+- clotho: Distill phase between Readiness and Spec — a Themis decision list escalates at `clotho:distill` and re-enters via `args.distillDecisions`; Distill runs only while spec validation is open (a run resumed past that gate never takes a late spec rewrite); spec-validation capped at 2 rounds per unit, `args.specSignoff` resets the budget (persisted with the started write) and re-runs Distill so the human-signed revision is re-grounded; the done seam returns `distill.claimsResolved`; the authored suite is recorded in the manifest before red-state so a torn-manifest resume reuses it (red-state + Argus still gate the reuse); red-state relay gets one fresh retry before `clotho:environment`; MIN_STATE_VERSION 0.6.0
+- talos: scripts run in the foreground to exit — a "still running" report is a protocol violation, never an outcome; long scripts take the maximum command timeout (600000 ms), not a background dispatch
+- cassandra (+opus): single-pass exhaustiveness (layered discovery across rounds is a seat failure); enforcement mechanisms verified from their source with cited lines, never from their name; every REVISION proposal names the mechanical check proving the edit closes it; intent-fidelity check against the distillation artifacts
+- hermes: documents the `clotho:distill` and spec-round seams; every escalation waits for the human decision — prior acceptance never covers new findings, and no spec edits without an explicit per-batch human instruction; escalation and seam reports carry cumulative agent token spend when available
+- CONTEXT.md distillation vocabulary (intent contract, claim table, intent decision); README cast table lists Themis
+
 ## 0.5.0 — 2026-07-27
 
 - lachesis: dev-loop shape is config/args-driven — `devRalph: { greensTarget, maxPasses }` (defaults 3/6), per-run `args.greensTarget`/`args.maxPasses`; `maxPasses` is a hard attempt budget; a sole green candidate skips the Minos seat and records the judge pick mechanically (pass-level Tier-1 + Fury gates remain the quality bar); MIN_STATE_VERSION 0.5.0

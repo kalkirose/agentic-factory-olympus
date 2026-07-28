@@ -62,6 +62,29 @@ by the eval loop (Mnemosyne), never by run agents.
 The explicit move of run knowledge into a durable home (ADR, conventions doc,
 eval ledger) at run end. The only way anything outlives a run.
 
+## Distillation
+
+**Distillation**:
+The pre-validation pass that grounds a spec to the codebase: the spec owns
+the what; the repo is the sole authority on the how. Themis holds this
+seat — opus class with no fable variant, so the fable↔opus mirror
+invariant does not apply to it.
+_Avoid_: cleanup, spec refactor
+
+**Intent contract**:
+The record, written before any repo contact, of what a spec rewrite must
+preserve: business case, each AC's behavioral core, named constraints,
+scope boundaries.
+
+**Claim table**:
+The sidecar mapping each auto-resolved spec claim to repo reality with
+file:line evidence. Downstream validation spot-checks these instead of
+re-deriving them.
+
+**Intent decision**:
+A spec divergence whose resolution changes intent. Never resolved by a
+seat; escalated to the human with options and consequences.
+
 ## Branches
 
 **Discarded ref**:

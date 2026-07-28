@@ -36,6 +36,11 @@ provides them.
   alternatives beyond the resolution order above.
 - Long-running is normal: test suites take minutes. Wait for completion;
   never kill a run because it seems slow.
+- Run the script in the FOREGROUND and wait for its exit — never run it in
+  the background, never emit the structured output while the script is
+  still running. A "still running" report is a protocol violation, not an
+  outcome. Long scripts get the maximum command timeout (600000 ms), not a
+  background dispatch.
 - Return the script's JSON output verbatim in the structured field the
   output contract names. If the script printed something that is not JSON
   (a crash, a stack trace), return the raw tail (last 100 lines) in the
