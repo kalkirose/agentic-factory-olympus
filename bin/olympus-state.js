@@ -71,6 +71,57 @@ function sidecarPath(manifestPath, name) {
   return path.join(path.dirname(manifestPath), 'sidecar', `${safe}.json`);
 }
 
+// The state dir holds two kinds of files: the permanent audit record
+// (runs/<unit>/**, last-run.json — always tracked) and churn that must never
+// enter git. Init and resync write this ignore file when missing; a file
+// already present (user-authored or ours) is never touched.
+const STATE_IGNORES = ['telemetry.log', 'hook-trace.log', 'active-run.json'];
+function ensureStateGitignore() {
+  // Hygiene never fails the command: any fs error degrades to a no-op.
+  try {
+    const p = path.join(stateDir, '.gitignore');
+    if (fs.existsSync(p)) return false;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      p,
+      [
+        '# Maintained by olympus-state (written once when missing; edits are kept).',
+        '# telemetry.log, hook-trace.log: appended on every hooked command — a',
+        '#   permanently dirty tree breaks post-merge branch cleanup and forces',
+        '#   stash dances.',
+        '# active-run.json: transient lock, created on init and deleted on close —',
+        '#   tracking it produces pointless delete-churn in every close-out.',
+        '# runs/ and last-run.json stay tracked: they are the audit record;',
+        '#   patterns are anchored so same-named files under runs/ stay tracked.',
+        '/telemetry.log',
+        '/hook-trace.log',
+        '/active-run.json',
+        '',
+      ].join('\n')
+    );
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// A tracked-but-ignored file defeats the state .gitignore: git keeps showing
+// its churn until `git rm --cached` lands. Close is the seam a human watches,
+// so it warns there — never fails.
+function stateHygieneWarnings() {
+  const { execSync } = require('child_process');
+  try {
+    const spec = STATE_IGNORES.map((n) => `.olympus/state/${n}`).join(' ');
+    const out = execSync(`git ls-files -- ${spec}`, { cwd, stdio: 'pipe' }).toString();
+    return out
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((rel) => `${rel.split('/').pop()} is git-tracked; gitignore cannot take effect until \`git rm --cached\` lands`);
+  } catch (e) {
+    return []; // no git repo / no git binary: nothing to warn about
+  }
+}
+
 // Terminal transition shared by `close` and init's supersede path: stamp
 // the manifest; when the target is the active run, record last-run.json
 // and delete the pointer. active-run.json existing is the definition of
@@ -107,6 +158,7 @@ if (cmd === 'init') {
   const configPath = path.join(cwd, '.olympus', 'config.json');
   if (!fs.existsSync(configPath)) die('.olympus/config.json not found in this project');
   const config = readJson(configPath);
+  ensureStateGitignore();
   // Starting a different unit is a deliberate act: an unclosed prior active
   // run is closed as superseded, never silently orphaned.
   let superseded = null;
@@ -264,6 +316,7 @@ if (cmd === 'init') {
   const configPath = path.join(cwd, '.olympus', 'config.json');
   if (!fs.existsSync(configPath)) die('.olympus/config.json not found');
   const config = readJson(configPath);
+  ensureStateGitignore();
   const { manifest, manifestPath } = loadActiveManifest();
   const refreshed = [];
   for (const key of ['commands', 'budget', 'hooks', 'conventions', 'docPaths', 'infraFlakeSignatures', 'uiPathPatterns', 'testRalph', 'devRalph', 'models']) {
@@ -369,8 +422,9 @@ if (cmd === 'init') {
   }
 
   const res = closeRun(manifest, manifestPath, relManifest, outcome);
+  const hygiene = stateHygieneWarnings();
   process.stdout.write(
-    JSON.stringify({ ok: true, closed: manifest.unitId, outcome: manifest.outcome, alreadyClosed: res.alreadyClosed, released: res.released })
+    JSON.stringify({ ok: true, closed: manifest.unitId, outcome: manifest.outcome, alreadyClosed: res.alreadyClosed, released: res.released, ...(hygiene.length ? { hygiene } : {}) })
   );
 } else if (cmd === 'list') {
   const runsDir = path.join(stateDir, 'runs');

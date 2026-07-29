@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2 — 2026-07-30
+
+- olympus-state: `init` and `resync` write `.olympus/state/.gitignore` when missing (anchored patterns for telemetry.log, hook-trace.log, active-run.json — the append-on-every-command logs and the transient lock never enter git; runs/** and last-run.json stay tracked as the audit record); an existing file is never overwritten, and any fs failure degrades to a no-op
+- olympus-state: `close` returns a non-fatal `hygiene` warning array when any of the three ignored files is still git-tracked (`git ls-files`) — gitignore cannot take effect until `git rm --cached` lands
+- hermes: mandatory post-merge close-out seam — `olympus-state close <unitId>` via Talos (the only surface for `hygiene` warnings), state delta landed on a `chore/olympus-<unit>-closeout` non-story PR cut from the freshly-pulled protected branch (never direct to it), story/pass branches confirmed deleted local and remote, stash clean; the unit is not done until the sweep is clean
+
 ## 0.6.1 — 2026-07-29
 
 - workflows: args from the Workflow runtime can arrive as a JSON string — each Fate normalizes args once at the top (a string that does not parse to an object degrades to no-args with a logged warning) and every later read goes through the normalized value; a stringified `specSignoff`/`distillDecisions`/loop-override no longer silently no-ops

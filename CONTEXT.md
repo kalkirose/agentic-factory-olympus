@@ -31,6 +31,16 @@ every workflow script; the runtime may deliver args as a JSON string, and a
 string that does not parse to an object degrades to no-args with a logged
 warning, never a thrown error.
 
+**State gitignore**:
+The `.olympus/state/.gitignore` init and resync write when missing: the
+append-only logs and the transient active-run lock never enter git;
+runs/<unit>/** and last-run.json stay tracked as the audit record.
+
+**Close-out sweep**:
+The orchestrator's mandatory post-merge seam: close the run, land the state
+delta as a chore PR, verify every run branch and stash entry is gone. A unit
+is not done until the sweep is clean.
+
 **Terminal step write**:
 The 'done'/'escalated' write that closes a step's 'started'. The test-author
 and adr-reconcile 'done' writes are verified (one extra relay attempt, then
