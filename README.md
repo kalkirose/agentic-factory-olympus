@@ -58,6 +58,7 @@ prompts, manifests, and reports.
 | Hephaestus | dev | one fresh implementation pass to green, within budget |
 | Mentor | between-pass | reads learnings; continue or abort with a route |
 | Minos | judge | picks the winner among green branches |
+| Clio | adr | fresh-context reconciliation of decision records against the shipped diff before the PR opens; deviations named, never absorbed |
 | Hebe | pr | writes a clean PR, watches the merge checks |
 | Talos | executor | invokes the deterministic `bin/` scripts and relays their JSON verbatim; judges nothing |
 | Dolos | adversary | writes plausible wrong implementations so a suite's kill rate is measurable pre-implementation |

@@ -11,6 +11,23 @@ export const meta = {
   ],
 }
 
+// ---- args normalization: the Workflow runtime can hand args through as a
+// JSON string rather than an object. Normalize once; every later read goes
+// through runArgs. A string that does not parse to an object degrades to
+// no-args with a logged warning — it must never throw and kill the run. ----
+let runArgs = args
+if (typeof runArgs === 'string') {
+  try {
+    runArgs = JSON.parse(runArgs)
+  } catch (e) {
+    runArgs = null
+  }
+  if (runArgs === null || typeof runArgs !== 'object') {
+    log('args arrived as a string that did not parse to an object — running with no args')
+    runArgs = null
+  }
+}
+
 // ---- talos relay: every mechanical step goes through one deterministic
 // bin script; the relay agent returns its JSON verbatim. ----
 const TALOS_SCHEMA = {
@@ -83,6 +100,18 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
     return { ok: false }
   }
 }
+// Terminal step writes are load-bearing: a lost 'done' leaves the manifest
+// reading 'started' forever, so a resumed run redoes finished work and the
+// step record lies to resync. One extra relay attempt beyond talos's own
+// retry; the caller decides what a persistent failure means.
+async function stepMust(scriptWithArgs, label, phaseName) {
+  let r = await talos(scriptWithArgs, label, phaseName)
+  if (!r.ok) {
+    log(`terminal step write failed — one more relay attempt: ${scriptWithArgs}`)
+    r = await talos(scriptWithArgs, `${label}-rewrite`, phaseName)
+  }
+  return r
+}
 
 // ---- Fable-seat dispatch: the judgment seats (cassandra, daedalus, minos)
 // run the fable model class by definition. When that dispatch dies (model
@@ -134,7 +163,7 @@ if (!installedVersion || versionLt(installedVersion, MIN_STATE_VERSION)) {
     `installed olympus plugin is stale (state version ${installedVersion || 'unknown'}, this workflow needs ≥ ${MIN_STATE_VERSION}) — reinstall the plugin, then re-run olympus:clotho`,
   ])
 }
-const requestedUnit = args && args.unitId ? String(args.unitId) : null
+const requestedUnit = runArgs && runArgs.unitId ? String(runArgs.unitId) : null
 
 const IRIS_SCHEMA = {
   type: 'object',
@@ -222,8 +251,8 @@ const THEMIS_SCHEMA = {
   },
   required: ['claimsResolved', 'claimTablePath', 'intentContractPath', 'decisions', 'summary'],
 }
-const distillDecisions = args && args.distillDecisions ? String(args.distillDecisions) : null
-const specSignoff = !!(args && args.specSignoff === true)
+const distillDecisions = runArgs && runArgs.distillDecisions ? String(runArgs.distillDecisions) : null
+const specSignoff = !!(runArgs && runArgs.specSignoff === true)
 const specValidated = !!(steps['spec-validation'] && steps['spec-validation'].status === 'done')
 let distillClaims = (steps['distill'] && steps['distill'].claimsResolved) || 0
 // Distill runs only while spec validation is still open: a run resumed past
@@ -441,10 +470,20 @@ async function authorAndValidate(passLabel, extraPrompt) {
     if (!argus) return { error: escalate('clotho:seat', ['Argus (validator) returned nothing after a retry — re-run olympus:clotho to resume']) }
     const blockers = argus.findings.filter((f) => f.severity === 'BLOCKER')
     if (argus.verdict === 'pass' && blockers.length === 0) {
-      await talos(`olympus-state step test-author done ${esc({ files: suite.testFiles.length, matrix: suite.matrixPath })}`, 'talos:step', 'Tests')
+      // The done write is verified: freezing over a dangling 'started' would
+      // make the resume protocol treat finished authoring as torn.
+      const done = await stepMust(`olympus-state step test-author done ${esc({ files: suite.testFiles.length, matrix: suite.matrixPath })}`, 'talos:step-author-done', 'Tests')
+      if (!done.ok) {
+        return {
+          error: escalate('clotho:state', [
+            `test-author done write failed twice: ${done.errorTail || JSON.stringify(done.output)} — the manifest still reads 'started'; the authored suite is recorded (authoredSuite), so re-running olympus:clotho reuses it`,
+          ]),
+        }
+      }
       return { suite, notes: argus.findings.filter((f) => f.severity === 'NOTE').length }
     }
     if (round === 2) {
+      await talosSoft(`olympus-state step test-author escalated ${esc({ blockers: blockers.length })}`, 'talos:step', 'Tests')
       return {
         error: escalate('clotho:tests', blockers.map((f) => `BLOCKER: ${f.summary} (${f.evidence})`), {
           unit: iris.unitId,
@@ -474,16 +513,23 @@ const trBase = manifest.testRalph || { passes: 1, adversaryCount: 0, refinementR
 const num = (v, d) => (v != null && Number.isFinite(Number(v)) ? Number(v) : d)
 // Per-invocation override: a single run can take a different suite count
 // (e.g. one authored suite) without editing tracked config.
-const tr = args && args.testPasses != null ? { ...trBase, passes: Math.max(1, num(args.testPasses, trBase.passes)) } : trBase
-if (args && args.testPasses != null) log(`Test-loop override from args: passes=${tr.passes}`)
+const tr = runArgs && runArgs.testPasses != null ? { ...trBase, passes: Math.max(1, num(runArgs.testPasses, trBase.passes)) } : trBase
+if (runArgs && runArgs.testPasses != null) log(`Test-loop override from args: passes=${tr.passes}`)
 const adversaryDir = `${runDir}/adversary`
 
 // Survivor-driven strengthening, shared by both suite shapes: each round
 // sends the surviving adversary faults back to the test author, re-freezes,
 // re-sweeps, and records the new kill rate. A clean sweep ends it early.
-async function refineAgainstSurvivors(suite, survivors) {
+// The test-author 'started'/'done' pair wraps the Daedalus dispatch alone,
+// and the verified 'done' lands BEFORE the refreeze: olympus-freeze writes
+// manifest.frozenTests unconditionally, so an interim-SHA write must never
+// precede the step's termination — a crash between them would leave a
+// frozen-looking manifest over a dangling 'started'. The authoredSuite
+// record tracks the refined files so a resume reuses them, never a stale set.
+async function refineAgainstSurvivors(suite, survivors, passLabel) {
   for (let round = 1; round <= (tr.refinementRounds || 0) && survivors.length; round++) {
     log(`Refinement round ${round}: strengthening against survivors ${survivors.join(', ')}`)
+    await talos('olympus-state step test-author started', 'talos:step', 'Tests')
     const refined = await seatAgent('daedalus',
       `REFINEMENT ROUND ${round} for the suite of unit ${iris.unitId} (files: ${suite.testFiles.join(', ')}).\n` +
         `These adversary implementations under "${adversaryDir}" SURVIVED the suite: ${survivors.join(', ')}. ` +
@@ -492,8 +538,21 @@ async function refineAgainstSurvivors(suite, survivors) {
         `Spec: "${iris.specPath}". Do not weaken or remove existing tests. Do not commit.`,
       { schema: DAEDALUS_SCHEMA, label: `daedalus:refine-${round}`, phase: 'Tests', effort: 'xhigh' }
     )
+    if (refined) {
+      suite = refined
+      await talos(`olympus-state merge ${esc({ authoredSuite: { files: suite.testFiles, matrixPath: suite.matrixPath, label: passLabel } })}`, `talos:authored-record-${round}`, 'Tests')
+    }
+    const done = await stepMust(`olympus-state step test-author done ${esc({ files: suite.testFiles.length, matrix: suite.matrixPath })}`, `talos:step-refine-done-${round}`, 'Tests')
+    if (!done.ok) {
+      return {
+        suite,
+        survivors,
+        error: escalate('clotho:state', [
+          `test-author done write failed twice after refinement round ${round}: ${done.errorTail || JSON.stringify(done.output)} — re-run olympus:clotho to resume`,
+        ]),
+      }
+    }
     if (!refined) break
-    suite = refined
     await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, `talos:refreeze-${round}`, 'Tests')
     const sweep = await killSweep(suite, `refine-${round}`)
     survivors = sweep ? sweep.survivors : []
@@ -502,7 +561,13 @@ async function refineAgainstSurvivors(suite, survivors) {
   return { suite, survivors }
 }
 
-if (!frozen) {
+// frozenTests alone does not prove the Freeze phase completed: candidate
+// commits and refinement refreezes record interim SHAs through
+// olympus-freeze. The freeze step's done record is the authority — until it
+// exists, a resume re-enters the Tests/Freeze block (the authoredSuite
+// reuse and the adversary done record keep that cheap).
+const freezeComplete = !!frozen && !!(steps['freeze'] && steps['freeze'].status === 'done')
+if (!freezeComplete) {
   // Adversary set: generated once, reused across every candidate suite.
   if (tr.adversaryCount > 0 && !(steps['adversary'] && steps['adversary'].status === 'done')) {
     const dolos = await seat(
@@ -527,12 +592,25 @@ if (!frozen) {
     let sweep = await killSweep(suite, 'single')
     let survivors = sweep ? sweep.survivors : []
     if (sweep) await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep.killRate, survivors } })}`, 'talos:kill-record', 'Tests')
-    if (survivors.length) ({ suite, survivors } = await refineAgainstSurvivors(suite, survivors))
+    if (survivors.length) {
+      const refined = await refineAgainstSurvivors(suite, survivors, 'author')
+      if (refined.error) return refined.error
+      suite = refined.suite
+      survivors = refined.survivors
+    }
     phase('Freeze')
     const fr = await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')
     if (!fr.ok) return escalate('clotho:state', [`freeze failed: ${fr.errorTail || JSON.stringify(fr.output)}`])
     frozen = fr.output.frozenTests
-    await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha, survivorsAtFreeze: survivors })}`, 'talos:step', 'Freeze')
+    // Verified write: the resume gate reads this record as proof the Freeze
+    // phase completed; losing it would send a later re-run back through the
+    // whole Tests/Freeze block.
+    const fd = await stepMust(`olympus-state step freeze done ${esc({ sha: frozen.sha, survivorsAtFreeze: survivors })}`, 'talos:step-freeze-done', 'Freeze')
+    if (!fd.ok) {
+      return escalate('clotho:state', [
+        `freeze done write failed twice: ${fd.errorTail || JSON.stringify(fd.output)} — the suite is committed at ${frozen.sha} but the manifest does not record the freeze as complete; re-run olympus:clotho to record it`,
+      ])
+    }
     if (survivors.length) log(`Frozen with ${survivors.length} surviving adversary implementation(s) — recorded for the eval ledger`)
   } else {
     // Test tournament: P candidate suites on branches, judged, refined, frozen.
@@ -549,6 +627,7 @@ if (!frozen) {
       const sweep = await killSweep(r.suite, `t${t}`)
       candidates.push({
         branch: tBranch,
+        label: `t${t}`,
         suite: r.suite,
         argusNotes: r.notes,
         killRate: sweep ? sweep.killRate : 'unmeasured',
@@ -585,7 +664,12 @@ if (!frozen) {
     // winner failed to kill, then freeze.
     let suite = winner.suite
     let survivors = winner.survivors
-    if (survivors.length) ({ suite, survivors } = await refineAgainstSurvivors(suite, survivors))
+    if (survivors.length) {
+      const refined = await refineAgainstSurvivors(suite, survivors, winner.label)
+      if (refined.error) return refined.error
+      suite = refined.suite
+      survivors = refined.survivors
+    }
 
     phase('Freeze')
     const fr = await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, 'talos:freeze', 'Freeze')
@@ -595,7 +679,15 @@ if (!frozen) {
       `olympus-state merge ${esc({ testJudge: { winner: judge.winner, rationale: judge.rationale, scores: judge.scores } })}`,
       'talos:test-judge-record', 'Freeze'
     )
-    await talos(`olympus-state step freeze done ${esc({ sha: frozen.sha, survivorsAtFreeze: survivors })}`, 'talos:step', 'Freeze')
+    // Verified write: the resume gate reads this record as proof the Freeze
+    // phase completed; losing it would send a later re-run back through the
+    // whole tournament.
+    const fd = await stepMust(`olympus-state step freeze done ${esc({ sha: frozen.sha, survivorsAtFreeze: survivors })}`, 'talos:step-freeze-done', 'Freeze')
+    if (!fd.ok) {
+      return escalate('clotho:state', [
+        `freeze done write failed twice: ${fd.errorTail || JSON.stringify(fd.output)} — the suite is committed at ${frozen.sha} but the manifest does not record the freeze as complete; re-run olympus:clotho to record it`,
+      ])
+    }
     if (survivors.length) log(`Frozen with ${survivors.length} surviving adversary implementation(s) — recorded for the eval ledger`)
   }
 }

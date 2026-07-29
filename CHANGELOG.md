@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1 — 2026-07-29
+
+- workflows: args from the Workflow runtime can arrive as a JSON string — each Fate normalizes args once at the top (a string that does not parse to an object degrades to no-args with a logged warning) and every later read goes through the normalized value; a stringified `specSignoff`/`distillDecisions`/loop-override no longer silently no-ops
+- clotho: the test-author step can no longer freeze over a dangling 'started' — the Argus-pass 'done' write is verified (one extra relay attempt, then a `clotho:state` escalation), the blocked round-2 exit records 'escalated' (best-effort write), each refinement round wraps only the Daedalus dispatch in 'started'/verified-'done' and terminates it before the refreeze, and the Tests/Freeze block skips on resume only when the freeze step is done — interim refreeze/candidate SHAs in `frozenTests` no longer read as a completed freeze; both `freeze done` writes are verified the same way
+- known limitation: tournament re-entry after a mid-refinement or post-freeze-commit crash re-authors over a baseBranch already carrying the crashed attempt's committed suite, so stale committed test files can linger outside the final frozen set (pre-existing in kind; the freeze-step resume gate slightly broadens the window)
+- clio: new seat (opus class, single variant) — fresh-context reconciliation of decision records against the shipped branch diff; atropos dispatches it as the re-entrant `adr-reconcile` step between winner checkout and the PR (no `docPaths.adrs` in the manifest → step recorded done with reviewed 0; Clio's deviations feed Hebe's PR-body prompt; a Clio failure after retry escalates instead of shipping; the adr-reconcile 'done' write is verified like test-author's); atropos MIN_STATE_VERSION 0.6.1
+- CONTEXT.md reconciliation vocabulary (normalized args, terminal step write, reconciliation); README cast table lists Clio
+
 ## 0.6.0 — 2026-07-28
 
 - themis: distillation seat (opus class, single variant) — grounds the spec to the codebase before Cassandra: intent contract written before any repo contact, four-register sentence classification, repo-answerable claims auto-resolved into a claim table, intent decisions escalated to the human; the only seat allowed to edit a spec

@@ -25,6 +25,19 @@ assumed.
 The check that a relayed manifest contains every key the script declared. A
 failed guard is a relay failure to retry or escalate, never state truth.
 
+**Normalized args**:
+The object form of a workflow invocation's args, parsed once at the top of
+every workflow script; the runtime may deliver args as a JSON string, and a
+string that does not parse to an object degrades to no-args with a logged
+warning, never a thrown error.
+
+**Terminal step write**:
+The 'done'/'escalated' write that closes a step's 'started'. The test-author
+and adr-reconcile 'done' writes are verified (one extra relay attempt, then
+escalation), and refinement terminates test-author before any refreeze, so a
+freeze can never complete over a dangling 'started'. The blocked-suite
+'escalated' write is best-effort.
+
 ## Learnings
 
 **Learnings**:
@@ -84,6 +97,18 @@ re-deriving them.
 **Intent decision**:
 A spec divergence whose resolution changes intent. Never resolved by a
 seat; escalated to the human with options and consequences.
+
+## Reconciliation
+
+**Reconciliation**:
+The ship-phase pass, between winner checkout and the PR, that rewrites every
+decision record the branch diff implements or contradicts into standalone
+present-tense fact. Clio holds this seat — fresh-context by design (the
+implementing agents never reconcile their own records), opus class with no
+fable variant, so the fable↔opus mirror invariant does not apply to it.
+Deviations between the diff and a prior recorded decision are named in the
+record and the PR body, never absorbed; a project without a decision-record
+directory skips the pass mechanically.
 
 ## Branches
 

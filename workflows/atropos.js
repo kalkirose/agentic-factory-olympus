@@ -8,6 +8,23 @@ export const meta = {
   ],
 }
 
+// ---- args normalization: the Workflow runtime can hand args through as a
+// JSON string rather than an object. Normalize once; every later read goes
+// through runArgs. A string that does not parse to an object degrades to
+// no-args with a logged warning — it must never throw and kill the run. ----
+let runArgs = args
+if (typeof runArgs === 'string') {
+  try {
+    runArgs = JSON.parse(runArgs)
+  } catch (e) {
+    runArgs = null
+  }
+  if (runArgs === null || typeof runArgs !== 'object') {
+    log('args arrived as a string that did not parse to an object — running with no args')
+    runArgs = null
+  }
+}
+
 const KRONOS_ROUTE_CAP = 2
 
 const TALOS_SCHEMA = {
@@ -46,6 +63,18 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
   if (!r.ok) log(`non-fatal step failed: ${scriptWithArgs}`)
   return r
 }
+// Terminal step writes are load-bearing: a lost 'done' leaves the manifest
+// reading 'started' forever, so a resumed run redoes finished work and the
+// step record lies to resync. One extra relay attempt beyond talos's own
+// retry; the caller decides what a persistent failure means.
+async function stepMust(scriptWithArgs, label, phaseName) {
+  let r = await talos(scriptWithArgs, label, phaseName)
+  if (!r.ok) {
+    log(`terminal step write failed — one more relay attempt: ${scriptWithArgs}`)
+    r = await talos(scriptWithArgs, `${label}-rewrite`, phaseName)
+  }
+  return r
+}
 // Guarded seat dispatch: same one-retry-then-null contract for judgment
 // seats. Callers decide what a null means (escalate, fall back, fail soft).
 async function seat(prompt, opts) {
@@ -80,7 +109,7 @@ async function getState(phaseName) {
   }
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
-const MIN_STATE_VERSION = '0.4.0'
+const MIN_STATE_VERSION = '0.6.1'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -124,6 +153,58 @@ const co = await talos(`olympus-branch checkout --name "${manifest.judge.winner}
 if (!co.ok) return escalate('atropos:state', [`could not check out winner: ${co.errorTail || JSON.stringify(co.output)}`])
 await talos(`olympus-state commit "chore(olympus): run state for ${manifest.unitId}"`, 'talos:state-commit', 'Ship')
 
+// ---- ADR reconciliation (Clio): seats cannot spawn subagents, so the
+// workflow itself dispatches the fresh-context record rewriter on the
+// winner's branch before the PR opens. Gated on the project keeping
+// decision records at all (manifest docPaths.adrs); re-entrant like every
+// step — a done record skips the seat and reuses its stored deviations.
+const CLIO_SCHEMA = {
+  type: 'object',
+  properties: {
+    reviewed: { type: 'number' },
+    amended: { type: 'array', items: { type: 'string' } },
+    commit: { type: 'string' },
+    deviations: { type: 'array', items: { type: 'string' } },
+    summary: { type: 'string' },
+  },
+  required: ['reviewed', 'amended', 'commit', 'deviations', 'summary'],
+}
+const steps = manifest.steps || {}
+let adrDeviations = (steps['adr-reconcile'] && steps['adr-reconcile'].deviations) || []
+if (!steps['adr-reconcile'] || steps['adr-reconcile'].status !== 'done') {
+  const adrDir = manifest.docPaths && manifest.docPaths.adrs
+  if (!adrDir) {
+    await talos(`olympus-state step adr-reconcile done ${esc({ reviewed: 0, note: 'no decision-record directory (docPaths.adrs) — nothing to reconcile' })}`, 'talos:step', 'Ship')
+  } else {
+    await talos('olympus-state step adr-reconcile started', 'talos:step', 'Ship')
+    const clio = await seat(
+      `Reconcile the decision records for unit ${manifest.unitId}.\n` +
+        `You are on the winning branch (${manifest.judge.winner}); the shipped diff is \`git diff ${manifest.conventions.prTargetBranch || 'main'}...HEAD\`.\n` +
+        `Decision records live under "${adrDir}". Read the project's root agent-guardrail files fresh for its record-keeping rules.\n` +
+        `Run every step from your definition. Commit on the current branch only when files changed.`,
+      { agentType: 'olympus:clio', schema: CLIO_SCHEMA, label: 'clio:adr-reconcile', phase: 'Ship', effort: 'xhigh' }
+    )
+    if (!clio) {
+      return escalate('atropos:seat', [
+        'Clio (adr) returned nothing after a retry — decision records are unreconciled and the run must not ship over that silently; re-run olympus:atropos to resume',
+      ])
+    }
+    adrDeviations = clio.deviations || []
+    // Verified write: the stored deviations are what a resumed run feeds
+    // Hebe, so this record must not be lost silently.
+    const adrDone = await stepMust(
+      `olympus-state step adr-reconcile done ${esc({ reviewed: clio.reviewed, amended: clio.amended, commit: clio.commit || '', deviations: adrDeviations })}`,
+      'talos:step-adr-done', 'Ship'
+    )
+    if (!adrDone.ok) {
+      return escalate('atropos:state', [
+        `adr-reconcile done write failed twice: ${adrDone.errorTail || JSON.stringify(adrDone.output)} — reconciliation itself completed on the branch; re-run olympus:atropos to record it (Clio re-runs over already-reconciled records)`,
+      ])
+    }
+    log(`ADR reconcile: ${clio.reviewed} record(s) reviewed, ${(clio.amended || []).length} amended${adrDeviations.length ? `, ${adrDeviations.length} deviation(s) for the PR body` : ''}`)
+  }
+}
+
 const HEBE_SCHEMA = {
   type: 'object',
   properties: {
@@ -166,6 +247,9 @@ const hebe = await seat(
     `judge rationale: ${manifest.judge.rationale}; ` +
     `flagged decisions a human must see: ${flagged.length ? flagged.join('; ') : 'none'}` +
     (furyNotes.length ? `; advisory gate notes (non-blocking): ${furyNotes.slice(0, 10).join('; ')}` : '') +
+    (adrDeviations.length
+      ? `\nDECISION-RECORD DEVIATIONS (reconciliation found the shipped diff diverging from prior recorded decisions — name each in the PR body, verbatim): ${adrDeviations.join(' | ')}`
+      : '') +
     (manifest.conventions.shipChecklist && manifest.conventions.shipChecklist.length
       ? `\nSHIP CHECKLIST (complete each item BEFORE opening the PR, committing on the branch where an item produces files): ${manifest.conventions.shipChecklist.join(' | ')}`
       : '') +

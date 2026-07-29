@@ -8,6 +8,23 @@ export const meta = {
   ],
 }
 
+// ---- args normalization: the Workflow runtime can hand args through as a
+// JSON string rather than an object. Normalize once; every later read goes
+// through runArgs. A string that does not parse to an object degrades to
+// no-args with a logged warning — it must never throw and kill the run. ----
+let runArgs = args
+if (typeof runArgs === 'string') {
+  try {
+    runArgs = JSON.parse(runArgs)
+  } catch (e) {
+    runArgs = null
+  }
+  if (runArgs === null || typeof runArgs !== 'object') {
+    log('args arrived as a string that did not parse to an object — running with no args')
+    runArgs = null
+  }
+}
+
 const MAX_CONTINUATIONS_PER_PASS = 2
 
 const TALOS_SCHEMA = {
@@ -151,11 +168,11 @@ if (!frozen || !frozen.sha) return escalate('lachesis:state', ['no frozen suite 
 // with fewer greens than the target proceeds to the judge with what exists.
 const num = (v, d) => (v != null && Number.isFinite(Number(v)) ? Number(v) : d)
 const dr = manifest.devRalph || {}
-const greensTarget = Math.max(1, num(args && args.greensTarget, num(dr.greensTarget, 3)))
-const maxPassesRaw = num(args && args.maxPasses, num(dr.maxPasses, 6))
+const greensTarget = Math.max(1, num(runArgs && runArgs.greensTarget, num(dr.greensTarget, 3)))
+const maxPassesRaw = num(runArgs && runArgs.maxPasses, num(dr.maxPasses, 6))
 const maxPasses = Math.max(greensTarget, maxPassesRaw)
 if (maxPasses !== maxPassesRaw) log(`maxPasses raised to greensTarget (${greensTarget}): a budget below the target cannot be satisfied`)
-if (args && (args.greensTarget != null || args.maxPasses != null)) log(`Loop overrides from args: greensTarget=${greensTarget}, maxPasses=${maxPasses}`)
+if (runArgs && (runArgs.greensTarget != null || runArgs.maxPasses != null)) log(`Loop overrides from args: greensTarget=${greensTarget}, maxPasses=${maxPasses}`)
 
 const unitId = manifest.unitId
 const safeId = unitId.replace(/[^a-zA-Z0-9._-]/g, '-')
