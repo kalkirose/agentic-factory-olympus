@@ -1,7 +1,8 @@
 export const meta = {
   name: 'atropos',
   description: 'Atropos (ship): Hebe opens the PR and watches checks; Hecate classifies failures into five routes; Kronos caps route executions at two, then mandatory escalation.',
-  whenToUse: 'Final phase of an Olympus run. Requires a judged winner from Lachesis.',
+  whenToUse:
+    'Final phase of an Olympus run. Requires a judged winner from Lachesis. Direct invocation skips Hermes: after the human merges, the close-out sweep (`olympus-state close <unit> --sweep`) still applies.',
   phases: [
     { title: 'Ship', detail: 'PR + merge-check watch' },
     { title: 'Triage', detail: 'Hecate routes failures; Kronos caps executions' },
@@ -109,7 +110,7 @@ async function getState(phaseName) {
   }
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
-const MIN_STATE_VERSION = '0.6.1'
+const MIN_STATE_VERSION = '0.6.3'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -259,6 +260,23 @@ const hebe = await seat(
 if (!hebe) return escalate('atropos:seat', ['Hebe (pr) returned nothing after a retry — re-run olympus:atropos to resume'])
 await talos(`olympus-state merge ${esc({ pr: { url: hebe.url, checks: hebe.checks, routeExecutions: routeCount } })}`, 'talos:record-pr', 'Ship')
 
+// PR-open sweep: with the winner branch carrying the open PR, every other
+// branch of this unit is dead weight — the freeze commit and the losing
+// passes live on in the winner's history and the discarded refs. The winner
+// branch itself must survive until the human merges (deleting a PR's head
+// closes the PR); the post-merge `close --sweep` collects it. Non-fatal:
+// a failed sweep costs tidiness, never the run.
+const unitPrefix = ((manifest.conventions && manifest.conventions.branchTemplate) || 'story/{unit}').replace('{unit}', manifest.unitId)
+const prSweep = await talosSoft(`olympus-branch sweep --prefix "${unitPrefix}" --keep "${manifest.judge.winner}" --remote`, 'talos:pr-open-sweep', 'Ship')
+if (prSweep.ok && prSweep.output && Array.isArray(prSweep.output.deleted) && prSweep.output.deleted.length) {
+  log(`PR-open sweep: deleted ${prSweep.output.deleted.join(', ')}`)
+}
+
+// The merge is human-owned and asynchronous — no harness process is alive
+// when it lands. Every merge-adjacent exit therefore carries the close-out
+// instruction; it is the only artifact that survives into that moment.
+const afterMerge = `after the human merges: run the close-out — olympus-state close ${manifest.unitId} --sweep, state delta on a chore/olympus-${manifest.unitId}-closeout PR (Hermes owns this)`
+
 const failing = hebe.checks.filter((c) => c.status !== 'pass')
 if (failing.length === 0 && hebe.needsHuman.length === 0) {
   await talos(`olympus-state step ship done ${esc({ url: hebe.url })}`, 'talos:step', 'Ship')
@@ -272,6 +290,7 @@ if (failing.length === 0 && hebe.needsHuman.length === 0) {
     url: hebe.url,
     oneLiner: hebe.oneLiner,
     humanDecisions: flagged,
+    afterMerge,
     escalations: [],
   }
 }
@@ -279,7 +298,7 @@ if (failing.length === 0 && hebe.needsHuman.length === 0) {
 // ------------------------------------------------------------------- Triage
 phase('Triage')
 if (hebe.needsHuman.length > 0 && failing.length === 0) {
-  return escalate('atropos:needs-human', hebe.needsHuman, { url: hebe.url, unit: manifest.unitId })
+  return escalate('atropos:needs-human', hebe.needsHuman, { url: hebe.url, unit: manifest.unitId, afterMerge })
 }
 
 const HECATE_SCHEMA = {

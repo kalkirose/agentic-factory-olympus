@@ -3,6 +3,7 @@
 //
 //   olympus-branch create --name <branch> --from <sha>
 //   olympus-branch delete --name <branch>
+//   olympus-branch sweep --prefix <p> [--keep <branch>] [--remote]
 //   olympus-branch current
 'use strict';
 const { git, printAndExit } = require('./olympus-exec-lib');
@@ -38,6 +39,44 @@ if (cmd === 'create') {
   const r = git(`branch -D "${name}"`, cwd);
   if (!r.ok) printAndExit({ ok: false, error: r.tail }, 1);
   printAndExit({ ok: true, deleted: name, discardedRef: `refs/olympus/discarded/${name}` });
+} else if (cmd === 'sweep') {
+  // Delete every branch under --prefix except --keep and the checked-out
+  // branch — locally, and on origin with --remote. Local tips are preserved
+  // as discarded refs first (same recovery contract as delete, docs/adr/0005).
+  // Failures accumulate as residual entries; the sweep itself never dies on
+  // one branch, so the caller always learns what survived and why.
+  const prefix = argOf('--prefix');
+  const keep = argOf('--keep');
+  const remote = args.includes('--remote');
+  if (!prefix) printAndExit({ ok: false, error: 'usage: sweep --prefix <p> [--keep <branch>] [--remote]' }, 1);
+  const head = git('rev-parse --abbrev-ref HEAD', cwd).tail.trim();
+  const deleted = [];
+  const residual = [];
+  const locals = git(`for-each-ref --format=%(refname:short) "refs/heads/${prefix}*"`, cwd);
+  for (const name of locals.ok ? locals.tail.trim().split(/\r?\n/).filter(Boolean) : []) {
+    if (name === keep) continue;
+    if (name === head) {
+      residual.push(`local ${name} is checked out`);
+      continue;
+    }
+    const tip = git(`rev-parse "refs/heads/${name}"`, cwd);
+    if (tip.ok) git(`update-ref "refs/olympus/discarded/${name}" ${tip.tail.trim()}`, cwd);
+    const r = git(`branch -D "${name}"`, cwd);
+    if (r.ok) deleted.push(name);
+    else residual.push(`local ${name}: ${r.tail.trim()}`);
+  }
+  if (remote) {
+    const ls = git(`ls-remote --heads origin "${prefix}*"`, cwd);
+    if (!ls.ok) residual.push(`could not list remote branches: ${ls.tail.trim()}`);
+    for (const line of ls.ok ? ls.tail.trim().split(/\r?\n/).filter(Boolean) : []) {
+      const name = line.split(/\s+/)[1].replace('refs/heads/', '');
+      if (name === keep) continue;
+      const r = git(`push origin --delete "${name}"`, cwd);
+      if (r.ok) deleted.push(`origin/${name}`);
+      else residual.push(`origin/${name}: ${r.tail.trim()}`);
+    }
+  }
+  printAndExit({ ok: true, deleted, ...(residual.length ? { residual } : {}) });
 } else if (cmd === 'checkout') {
   const name = argOf('--name');
   if (!name) printAndExit({ ok: false, error: 'usage: checkout --name <branch>' }, 1);
@@ -55,5 +94,5 @@ if (cmd === 'create') {
   if (!r.ok) printAndExit({ ok: false, error: r.tail }, 1);
   printAndExit({ ok: true, files: r.tail.trim() ? r.tail.trim().split(/\r?\n/) : [] });
 } else {
-  printAndExit({ ok: false, error: `unknown command: ${cmd || '(none)'} — expected create|checkout|delete|current` }, 1);
+  printAndExit({ ok: false, error: `unknown command: ${cmd || '(none)'} — expected create|checkout|delete|sweep|current` }, 1);
 }

@@ -3,15 +3,22 @@
 // .olympus/state/ besides the other Olympus bin scripts. Invoked by Talos
 // (executor) on behalf of the Fates; prints JSON to stdout.
 //
-//   olympus-state init <unitId>      create manifest from .olympus/config.json,
+//   olympus-state init <unitId> [--force]
+//                                    create manifest from .olympus/config.json,
 //                                    point active-run.json at it (idempotent:
-//                                    re-init of the same unit keeps the manifest)
+//                                    re-init of the same unit keeps the manifest).
+//                                    Refuses while the previous unit's branches
+//                                    survive (--force overrides)
 //   olympus-state get                print the active manifest + its key list
 //   olympus-state list              every run under .olympus/state/runs with
 //                                    phase/outcome/active flag
-//   olympus-state close [<unitId>] [--outcome shipped|abandoned|superseded]
+//   olympus-state close [<unitId>] [--outcome shipped|abandoned|superseded] [--sweep]
 //                                    stamp terminal state on a run (default the
-//                                    active one) and release active-run.json
+//                                    active one) and release active-run.json.
+//                                    Always reports branch/stash hygiene; --sweep
+//                                    additionally deletes the unit's surviving
+//                                    branches (post-merge only: sweeping while the
+//                                    PR is open deletes its head branch)
 //   olympus-state merge <json>       shallow-merge a JSON fragment into the
 //                                    manifest (object values merge one level deep)
 //   olympus-state step <name> <status> [<json>]   record a step outcome
@@ -122,6 +129,102 @@ function stateHygieneWarnings() {
   }
 }
 
+// Branch/stash hygiene for a unit. The prefix comes from the manifest's
+// branch template so nothing here hardcodes a naming scheme. Read-only —
+// sweepUnitBranches acts on what this reports. Every check degrades to
+// silence (or an explicit "unverified" warning for the network call): a
+// hygiene probe must never fail the close it decorates.
+function unitBranchPrefix(manifest) {
+  const template =
+    (manifest.conventions && manifest.conventions.branchTemplate) || 'story/{unit}';
+  return template.replace('{unit}', manifest.unitId);
+}
+function unitHygiene(prefix) {
+  const { execSync } = require('child_process');
+  const sh = (c) => execSync(c, { cwd, stdio: 'pipe' }).toString();
+  const warnings = [];
+  const local = [];
+  const remote = [];
+  try {
+    sh('git rev-parse --git-dir');
+  } catch (e) {
+    return { warnings, local, remote }; // no git repo / no git binary
+  }
+  try {
+    for (const b of sh(`git for-each-ref --format=%(refname:short) "refs/heads/${prefix}*"`)
+      .split(/\r?\n/)
+      .filter(Boolean)) {
+      local.push(b);
+      warnings.push(`local branch ${b} survives the closed unit`);
+    }
+  } catch (e) {
+    // listing failure: no claim either way
+  }
+  try {
+    for (const line of sh(`git ls-remote --heads origin "${prefix}*"`)
+      .split(/\r?\n/)
+      .filter(Boolean)) {
+      const name = line.split(/\s+/)[1].replace('refs/heads/', '');
+      remote.push(name);
+      warnings.push(`remote branch origin/${name} survives the closed unit`);
+    }
+  } catch (e) {
+    warnings.push('could not list remote branches — remote hygiene unverified');
+  }
+  try {
+    const stash = sh('git stash list')
+      .split(/\r?\n/)
+      .filter(Boolean);
+    if (stash.length) {
+      warnings.push(`git stash holds ${stash.length} entr${stash.length === 1 ? 'y' : 'ies'} — inspect before the next run`);
+    }
+  } catch (e) {
+    // ditto
+  }
+  return { warnings, local, remote };
+}
+
+// --sweep: delete the unit's surviving branches, local and remote. Local
+// tips are preserved as discarded refs first (same recovery contract as
+// olympus-branch delete, docs/adr/0005). The checked-out branch is never
+// deleted; it stays behind as a residual warning.
+function sweepUnitBranches(prefix) {
+  const { execSync } = require('child_process');
+  const sh = (c) => execSync(c, { cwd, stdio: 'pipe' }).toString();
+  const { local, remote } = unitHygiene(prefix);
+  const deleted = [];
+  const residual = [];
+  let head = null;
+  try {
+    head = sh('git rev-parse --abbrev-ref HEAD').trim();
+  } catch (e) {
+    // detached HEAD: nothing is checked out by name
+  }
+  for (const b of local) {
+    if (b === head) {
+      residual.push(`local branch ${b} is checked out — switch away and re-run the sweep`);
+      continue;
+    }
+    try {
+      const tip = sh(`git rev-parse "refs/heads/${b}"`).trim();
+      sh(`git update-ref "refs/olympus/discarded/${b}" ${tip}`);
+      sh(`git branch -D "${b}"`);
+      deleted.push(b);
+    } catch (e) {
+      residual.push(`could not delete local branch ${b}`);
+    }
+  }
+  for (const b of remote) {
+    try {
+      sh(`git push origin --delete "${b}"`);
+      deleted.push(`origin/${b}`);
+    } catch (e) {
+      residual.push(`could not delete remote branch origin/${b}`);
+    }
+  }
+  return { deleted, residual };
+}
+
 // Terminal transition shared by `close` and init's supersede path: stamp
 // the manifest; when the target is the active run, record last-run.json
 // and delete the pointer. active-run.json existing is the definition of
@@ -154,11 +257,38 @@ const [, , cmd, ...args] = process.argv;
 
 if (cmd === 'init') {
   const unitId = args[0];
-  if (!unitId) die('usage: olympus-state init <unitId>');
+  if (!unitId || unitId.startsWith('--')) die('usage: olympus-state init <unitId> [--force]');
   const configPath = path.join(cwd, '.olympus', 'config.json');
   if (!fs.existsSync(configPath)) die('.olympus/config.json not found in this project');
   const config = readJson(configPath);
   ensureStateGitignore();
+  // A new unit must not start over the previous unit's debris: surviving
+  // branches mean the post-merge close-out never ran (or failed). The gate
+  // is mechanical so the sweep cannot be skipped by prose; --force is the
+  // human override for deliberate exceptions. A torn last-run or manifest
+  // never blocks init.
+  if (!args.includes('--force') && fs.existsSync(path.join(stateDir, 'last-run.json'))) {
+    try {
+      const last = readJson(path.join(stateDir, 'last-run.json'));
+      if (last.unitId && last.unitId !== unitId && last.manifest) {
+        const lastManifestPath = path.isAbsolute(last.manifest)
+          ? last.manifest
+          : path.join(cwd, last.manifest);
+        if (fs.existsSync(lastManifestPath)) {
+          const prior = unitHygiene(unitBranchPrefix(readJson(lastManifestPath)));
+          if (prior.local.length || prior.remote.length) {
+            die(
+              `previous unit ${last.unitId} is not swept — surviving branches: ` +
+                [...prior.local, ...prior.remote.map((b) => `origin/${b}`)].join(', ') +
+                `. Run \`olympus-state close ${last.unitId} --sweep\` (post-merge), or re-run init with --force.`
+            );
+          }
+        }
+      }
+    } catch (e) {
+      // torn last-run/manifest: the gate stands down rather than blocking
+    }
+  }
   // Starting a different unit is a deliberate act: an unclosed prior active
   // run is closed as superseded, never silently orphaned.
   let superseded = null;
@@ -406,7 +536,9 @@ if (cmd === 'init') {
   const oi = args.indexOf('--outcome');
   const outcome = oi >= 0 ? args[oi + 1] : 'shipped';
   if (!OUTCOMES.includes(outcome)) die(`invalid outcome "${outcome}" — expected one of: ${OUTCOMES.join(', ')}`);
-  const unitArg = args.filter((a, i) => oi < 0 || (i !== oi && i !== oi + 1))[0] || null;
+  const sweep = args.includes('--sweep');
+  const unitArg =
+    args.filter((a, i) => a !== '--sweep' && (oi < 0 || (i !== oi && i !== oi + 1)))[0] || null;
 
   let manifest, manifestPath, relManifest;
   if (unitArg) {
@@ -422,9 +554,27 @@ if (cmd === 'init') {
   }
 
   const res = closeRun(manifest, manifestPath, relManifest, outcome);
-  const hygiene = stateHygieneWarnings();
+  const prefix = unitBranchPrefix(manifest);
+  let swept = null;
+  let residual = [];
+  if (sweep) {
+    const r = sweepUnitBranches(prefix);
+    swept = r.deleted;
+    residual = r.residual;
+  }
+  // Hygiene is re-read after a sweep so the report describes what actually
+  // survives, not what existed before deletion.
+  const hygiene = [...stateHygieneWarnings(), ...unitHygiene(prefix).warnings, ...residual];
   process.stdout.write(
-    JSON.stringify({ ok: true, closed: manifest.unitId, outcome: manifest.outcome, alreadyClosed: res.alreadyClosed, released: res.released, ...(hygiene.length ? { hygiene } : {}) })
+    JSON.stringify({
+      ok: true,
+      closed: manifest.unitId,
+      outcome: manifest.outcome,
+      alreadyClosed: res.alreadyClosed,
+      released: res.released,
+      ...(swept ? { swept } : {}),
+      ...(hygiene.length ? { hygiene } : {}),
+    })
   );
 } else if (cmd === 'list') {
   const runsDir = path.join(stateDir, 'runs');

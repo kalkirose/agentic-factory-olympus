@@ -59,11 +59,14 @@ Clotho's distill and spec seams:
 Atropos ending is not the unit ending. After the human merges the story
 PR, you own the close-out sweep, in the project directory:
 
-1. Run `olympus-state close <unitId>` via Talos — always pass the unit
-   id: Atropos's own close already released active-run.json, so the
-   no-arg form fails. Expect `alreadyClosed: true`. Relay any `hygiene`
-   warnings to the human verbatim — this is the only place they surface;
-   Atropos discards its close result.
+1. Run `olympus-state close <unitId> --sweep` via Talos — always pass the
+   unit id: Atropos's own close already released active-run.json, so the
+   no-arg form fails. Expect `alreadyClosed: true`. The sweep deletes the
+   unit's surviving branches (local and remote, discarded refs preserved);
+   `--sweep` is post-merge-only — before the merge it would delete the
+   PR's head branch. Relay the `swept` list and any `hygiene` warnings to
+   the human verbatim — this is the only place they surface; Atropos
+   discards its close result.
 2. Commit the state delta the close leaves behind — `runs/<unit>/**` and
    `last-run.json`, never the gitignored logs or lock — on a
    `chore/olympus-<unit>-closeout` branch cut from the freshly-pulled
@@ -75,9 +78,12 @@ PR, you own the close-out sweep, in the project directory:
    no-merge rule below; story PRs stay human-merged. You run these
    git/gh commands yourself: Talos invokes Olympus bins only, and
    `olympus-state commit` cannot branch, push, or open a PR.
-3. Branch hygiene: confirm the story branch and every pass/tournament
-   branch are deleted local AND remote, and `git stash list` holds no
-   entries from this run.
+3. Verify, don't trust: the close output's `hygiene` array must be empty
+   (it re-checks branches and stash after the sweep). A non-empty array
+   names exactly what survived and why; resolve it or escalate — never
+   report the sweep clean over a warning. Base and losing-pass branches
+   are normally already gone (Atropos sweeps them at PR-open); the story
+   PR's head branch is this sweep's usual work.
 
 The unit is not done until this sweep is clean. Never declare
 ready-for-next-story while any part of it is open.

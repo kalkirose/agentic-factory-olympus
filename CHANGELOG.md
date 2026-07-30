@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3 — 2026-07-31
+
+- olympus-branch: new `sweep --prefix <p> [--keep <branch>] [--remote]` — deletes every branch under the prefix except `--keep` and the checked-out branch, local and (with `--remote`) origin; local tips preserved as discarded refs (docs/adr/0005); per-branch failures accumulate as `residual`, never kill the sweep
+- olympus-state: `close` always reports unit branch/stash hygiene (branches surviving under the manifest's branch template, stash entries) alongside the tracked-state warnings; `close --sweep` additionally deletes the surviving branches and re-checks, so the report describes what actually survives — post-merge only (sweeping earlier deletes the open PR's head branch)
+- olympus-state: `init` refuses to start a new unit while the previous unit's branches survive (mechanical backstop for a skipped close-out; the error names the branches and the fix); `--force` overrides; torn last-run/manifest never blocks
+- atropos: PR-open sweep — after Hebe records the PR, the base branch and losing pass branches are deleted local+remote via `olympus-branch sweep --keep <winner>` (non-fatal); the freeze commit and losing diffs stay reachable through the winner's history and discarded refs
+- atropos: every merge-adjacent exit (done seam, needs-human escalation) carries an `afterMerge` instruction naming the close-out — the merge is human-owned and asynchronous, so the seam payload is the only artifact that survives into that moment; meta.whenToUse warns that direct invocation skips Hermes; MIN_STATE_VERSION 0.6.3
+- hermes: close-out step 1 is now `olympus-state close <unitId> --sweep`; step 3 verifies the close output's `hygiene` array is empty instead of re-deriving branch state by hand
+
 ## 0.6.2 — 2026-07-30
 
 - olympus-state: `init` and `resync` write `.olympus/state/.gitignore` when missing (anchored patterns for telemetry.log, hook-trace.log, active-run.json — the append-on-every-command logs and the transient lock never enter git; runs/** and last-run.json stay tracked as the audit record); an existing file is never overwritten, and any fs failure degrades to a no-op
