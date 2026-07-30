@@ -186,7 +186,16 @@ const iris = await seat(
 )
 if (!iris) return escalate('clotho:seat', ['Iris (scout) returned nothing after a retry — re-run olympus:clotho to resume'])
 if (!iris.ready) {
-  return escalate('clotho:readiness', iris.unmet, { unit: iris.unitId, title: iris.title })
+  // Re-entry deadlock guard: a launch that carries the human answers for an
+  // open distill/spec escalation IS the resolution of that escalation. Iris
+  // is blind to workflow args, so it reports the open escalation as unmet —
+  // escalating here would bounce the answers forever. Defer readiness to the
+  // step that consumes them; a genuine blocker still kills that step.
+  if (runArgs && (runArgs.distillDecisions || runArgs.specSignoff)) {
+    log(`readiness: ${iris.unmet.length} unmet item(s) deferred — this launch carries the human decisions for the open escalation`)
+  } else {
+    return escalate('clotho:readiness', iris.unmet, { unit: iris.unitId, title: iris.title })
+  }
 }
 
 const init = await talos(`olympus-state init "${iris.unitId}"`, 'talos:init', 'Readiness')

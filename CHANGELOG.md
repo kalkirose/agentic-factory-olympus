@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.4 — 2026-07-31
+
+- clotho: re-entry deadlock fixed — a launch carrying `args.distillDecisions`/`args.specSignoff` no longer escalates at readiness when Iris (blind to workflow args) reports the open distill/spec escalation itself as unmet; the readiness verdict is deferred to the step that consumes the answers (found live on the first distill re-entry, 3-3-preview-deploys)
+
 ## 0.6.3 — 2026-07-31
 
 - olympus-branch: new `sweep --prefix <p> [--keep <branch>] [--remote]` — deletes every branch under the prefix except `--keep` and the checked-out branch, local and (with `--remote`) origin; local tips preserved as discarded refs (docs/adr/0005); per-branch failures accumulate as `residual`, never kill the sweep
