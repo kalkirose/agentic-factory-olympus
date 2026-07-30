@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.5 — 2026-07-31
+
+- clotho: `args.distillDecisions` passed as an object no longer degrades to the literal `"[object Object]"` in the Themis prompt (silently discarding the human's answers — found live on the second distill re-entry, 3-3-preview-deploys); an object is serialized per DECISION id, a string passes through verbatim
+
 ## 0.6.4 — 2026-07-31
 
 - clotho: re-entry deadlock fixed — a launch carrying `args.distillDecisions`/`args.specSignoff` no longer escalates at readiness when Iris (blind to workflow args) reports the open distill/spec escalation itself as unmet; the readiness verdict is deferred to the step that consumes the answers (found live on the first distill re-entry, 3-3-preview-deploys)

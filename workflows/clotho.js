@@ -260,7 +260,19 @@ const THEMIS_SCHEMA = {
   },
   required: ['claimsResolved', 'claimTablePath', 'intentContractPath', 'decisions', 'summary'],
 }
-const distillDecisions = runArgs && runArgs.distillDecisions ? String(runArgs.distillDecisions) : null
+// The decisions may arrive as a text blob or as a {D1: ..., D2: ...} object —
+// both are faithful transports. String() on an object is neither: it hands
+// Themis the literal "[object Object]" and silently discards the human's
+// answers (found live on the first distill re-entry, 3-3-preview-deploys).
+const rawDecisions = runArgs ? runArgs.distillDecisions : null
+const distillDecisions =
+  rawDecisions == null
+    ? null
+    : typeof rawDecisions === 'string'
+      ? rawDecisions
+      : Object.entries(rawDecisions)
+          .map(([id, answer]) => `DECISION ${id}: ${typeof answer === 'string' ? answer : JSON.stringify(answer)}`)
+          .join('\n\n')
 const specSignoff = !!(runArgs && runArgs.specSignoff === true)
 const specValidated = !!(steps['spec-validation'] && steps['spec-validation'].status === 'done')
 let distillClaims = (steps['distill'] && steps['distill'].claimsResolved) || 0
