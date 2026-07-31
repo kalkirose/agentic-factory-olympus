@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.7 — 2026-08-01
+
+- all three Fates: `getState` no longer accepts a relayed manifest that arrives without its `keys` list — that is the exact truncation signature (found live twice: the atropos "no judged winner" false escalation and a lachesis crash on `manifest.conventions` after the state relay returned 3.5KB of a 15KB manifest); keyless relays retry once, then fail as relay corruption, never as state truth
+
 ## 0.6.6 — 2026-07-31
 
 - lachesis: `runVerdict` no longer crashes the build loop when the Talos relay answers ok:true with no `output` (the relay schema requires only `ok`; found live on pass 1 of 3-3-preview-deploys) — no usable output after one fresh retry degrades to a failed round, never a crash

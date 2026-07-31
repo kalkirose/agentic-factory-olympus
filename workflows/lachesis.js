@@ -122,7 +122,9 @@ async function getState(phaseName) {
       if (!missing.length) return st
       log(`state relay dropped keys: ${missing.join(', ')} — retrying the relay`)
     } else if (m) {
-      return st
+      // State ≥ 0.6.1 always prints its key list (version-gated below); a
+      // relayed manifest without one is a relay defect, never state truth.
+      log('state relay dropped the keys list — retrying the relay')
     }
   }
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
