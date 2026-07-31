@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.6 — 2026-07-31
+
+- lachesis: `runVerdict` no longer crashes the build loop when the Talos relay answers ok:true with no `output` (the relay schema requires only `ok`; found live on pass 1 of 3-3-preview-deploys) — no usable output after one fresh retry degrades to a failed round, never a crash
+- all three Fates: the Talos relay prompt now demands the script output COMPLETE and VERBATIM — never truncated, summarized, or field-dropped — closing the relay-fidelity class that produced both the atropos manifest truncation and the lachesis empty verdict
+
 ## 0.6.5 — 2026-07-31
 
 - clotho: `args.distillDecisions` passed as an object no longer degrades to the literal `"[object Object]"` in the Themis prompt (silently discarding the human's answers — found live on the second distill re-entry, 3-3-preview-deploys); an object is serialized per DECISION id, a string passes through verbatim

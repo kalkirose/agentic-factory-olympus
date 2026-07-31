@@ -50,6 +50,7 @@ async function talos(scriptWithArgs, label, phaseName) {
         `Run the Olympus script: ${scriptWithArgs}\n` +
           `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
           `and set "ok" to whether the script itself reported ok:true. ` +
+          `Relay the output COMPLETE and VERBATIM — never truncate, summarize, or omit any field or key, whatever the size. ` +
           `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
         { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label: attempt === 1 ? label : `${label}-retry`, phase: phaseName, effort: 'xhigh' }
       )

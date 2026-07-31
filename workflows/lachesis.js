@@ -47,6 +47,7 @@ async function talos(scriptWithArgs, label, phaseName) {
         `Run the Olympus script: ${scriptWithArgs}\n` +
           `Put the script's JSON output (parsed) in the "output" field, its exit code in "exitCode", ` +
           `and set "ok" to whether the script itself reported ok:true. ` +
+          `Relay the output COMPLETE and VERBATIM — never truncate, summarize, or omit any field or key, whatever the size. ` +
           `If the output was not JSON, put the raw tail in "errorTail" and set ok:false.`,
         { agentType: 'olympus:talos', schema: TALOS_SCHEMA, label: attempt === 1 ? label : `${label}-retry`, phase: phaseName, effort: 'xhigh' }
       )
@@ -264,9 +265,21 @@ function contextPackage(passN) {
 }
 
 async function runVerdict(n, branch) {
-  const v = await talos(`olympus-verdict --pass ${n} --expect-branch "${branch}"`, `talos:verdict-${n}`, 'Build loop')
-  if (!v.ok && !v.output) return { pass: false, checks: [], error: v.errorTail || 'verdict script failed to run' }
-  return v.output
+  // A relay can answer ok:true with no output at all (the schema requires
+  // only `ok`); returning that undefined crashes the loop at verdict.pass
+  // (found live, pass 1 of 3-3-preview-deploys). No usable output after one
+  // fresh retry degrades to a failed round — never state truth, never a
+  // crash.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const v = await talos(
+      `olympus-verdict --pass ${n} --expect-branch "${branch}"`,
+      attempt === 1 ? `talos:verdict-${n}` : `talos:verdict-${n}-retry`,
+      'Build loop'
+    )
+    if (v && v.output && typeof v.output.pass === 'boolean') return v.output
+    log(`verdict relay returned no usable output for pass ${n} — ${attempt === 1 ? 'one fresh retry' : 'treating the round as failed'}`)
+  }
+  return { pass: false, checks: [], error: 'verdict relay dropped its output after a retry' }
 }
 
 function failedChecksSummary(verdict) {
