@@ -14,7 +14,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { run, git, loadManifest, printAndExit, runWithFlakeRetry } = require('./olympus-exec-lib');
+const { run, git, gitLines, loadManifest, printAndExit, runWithFlakeRetry } = require('./olympus-exec-lib');
 
 const cwd = process.cwd();
 const args = process.argv.slice(2);
@@ -68,14 +68,93 @@ if (pass) {
 // infra-flake signature retry once; every retry is flagged, never silent.
 const flakeFlags = [];
 const signatures = manifest.infraFlakeSignatures || [];
+
+// Foreign-test flake guard (suite layers only — typecheck and gate failures
+// name source defects, not test outcomes). A failing layer whose every named
+// failing test lies outside the unit — not a frozen-suite path, untouched by
+// the pass diff — earns ONE re-run before the verdict records it: such a
+// failure cannot come from this pass's work, and a real regression elsewhere
+// fails the re-run identically. A green re-run counts green and is flagged
+// with (file, test, signature) per test, never silent; a second failure
+// stands. Extraction reads failure-marker lines only (FAIL / ✘ ✖ × ✗ /
+// numbered Playwright failures), so stack frames and module-load noise never
+// qualify, and a tail with no extractable test file never fires the guard.
+const ANSI = /\u001b\[[0-9;]*m/g;
+const norm = (p) => String(p).replace(/\\/g, '/');
+const frozenNorm = (frozen.paths || []).map(norm);
+function failingTestsFrom(tailText) {
+  const MARKER = /(?:\bFAIL\b|[✘✖×✗]|^\s*\d+\)\s)/;
+  const ERRLINE = /^\s*(?:[A-Za-z][\w$]*)?Error\b/;
+  const entries = [];
+  const seen = new Set();
+  for (const raw of String(tailText || '').split(/\r?\n/)) {
+    const line = raw.replace(ANSI, '');
+    if (!MARKER.test(line)) {
+      // Error lines between markers carry the assertion text; the nearest
+      // unsigned entry owns it.
+      if (ERRLINE.test(line)) {
+        const open = entries.filter((e) => !e.signature).pop();
+        if (open) open.signature = line.trim().slice(0, 200);
+      }
+      continue;
+    }
+    for (const tok of line.match(/[^\s'"|]+/g) || []) {
+      const t = norm(tok).replace(/[)\]"',;:.]+$/, '').replace(/^[(\["']+/, '');
+      const m = t.match(/^(.+\.[A-Za-z][A-Za-z0-9]*)(?::\d+)*$/);
+      if (!m || !m[1].includes('/') || m[1].includes('node_modules')) continue;
+      const file = m[1];
+      const segs = line
+        .slice(line.indexOf(tok) + tok.length)
+        .split(/\s+[>›]\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const test = segs.length ? segs[segs.length - 1] : '';
+      const key = `${file}::${test}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        entries.push({ file, test, signature: '' });
+      }
+      break; // the first path token on a marker line names the test file
+    }
+  }
+  return entries;
+}
+// Runners print paths relative to their package cwd while frozen paths and
+// the diff are repo-relative, so membership is suffix-tolerant.
+function samePath(a, b) {
+  return a === b || a.endsWith('/' + b) || b.endsWith('/' + a);
+}
+let passDiff = null; // computed on the first failing layer; false = unknowable
+function passDiffList() {
+  if (passDiff === null) {
+    const d = gitLines(`diff --name-only ${frozen.sha} HEAD`, cwd);
+    passDiff = d.ok ? d.lines.map(norm) : false;
+  }
+  return passDiff;
+}
+function isForeign(file) {
+  const diffList = passDiffList();
+  if (diffList === false) return false; // an unknowable diff never certifies foreignness
+  return !frozenNorm.some((p) => samePath(file, p)) && !diffList.some((p) => samePath(file, p));
+}
+function foreignFlakeGuard(command, layerName, result) {
+  if (result.ok) return result;
+  const failing = failingTestsFrom(result.tail);
+  if (!failing.length || !failing.every((t) => isForeign(t.file))) return result;
+  const second = run(command, cwd);
+  flakeFlags.push({ name: 'foreign-test-flake-retry', layer: layerName, recovered: second.ok, tests: failing });
+  return second.ok ? second : result; // the original failure stands — its tail names the foreign tests
+}
+
 if (pass) {
   const layers = Array.isArray(manifest.commands.fullSuite)
     ? manifest.commands.fullSuite
     : [{ name: 'suite', command: manifest.commands.fullSuite }];
   for (const layer of layers) {
     if (!layer || !layer.command) continue;
-    const { result, retried, matchedSignature } = runWithFlakeRetry(layer.command, cwd, signatures);
-    if (retried) flakeFlags.push({ name: 'infra-flake-retry', layer: layer.name, signature: matchedSignature, recovered: result.ok });
+    const r = runWithFlakeRetry(layer.command, cwd, signatures);
+    if (r.retried) flakeFlags.push({ name: 'infra-flake-retry', layer: layer.name, signature: r.matchedSignature, recovered: r.result.ok });
+    const result = foreignFlakeGuard(layer.command, layer.name || 'suite', r.result);
     check(`suite:${layer.name || 'suite'}`, result);
     if (!result.ok) break; // fail fast; remaining layers would waste minutes
   }

@@ -54,6 +54,15 @@ Clotho's distill and spec seams:
   round 2 the gate refuses further automatic passes: the human signs off
   a spec revision, then re-launch with `args.specSignoff: true`.
 
+Lachesis's single-green seam:
+
+- With a greens target of 1, a failed pass verdict does not auto-continue:
+  `olympus:lachesis` escalates at `lachesis:pass-verdict` carrying the
+  failing checks verbatim and the between-pass learnings summary. Present
+  them, wait. When the human authorizes another pass, re-launch
+  `olympus:lachesis` with `args.passContinue: true` — the flag buys exactly
+  one continuation into the next pass; a further failure escalates again.
+
 ## Post-merge close-out (mandatory)
 
 Atropos ending is not the unit ending. After the human merges the story

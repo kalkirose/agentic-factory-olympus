@@ -40,6 +40,17 @@ function git(argsStr, cwd) {
   return run(`git ${argsStr}`, cwd);
 }
 
+// List-producing git calls need the full output: `run` keeps only the tail,
+// which caps long name lists at TAIL_LINES entries.
+function gitLines(argsStr, cwd) {
+  try {
+    const out = execSync(`git ${argsStr}`, { cwd, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+    return { ok: true, lines: out.toString().split(/\r?\n/).filter(Boolean) };
+  } catch (e) {
+    return { ok: false, lines: [] };
+  }
+}
+
 // Run a command; on failure whose output matches a declared infrastructure
 // flake signature (regex strings from project config), retry ONCE. The
 // retry is reported, never silent — callers must surface `retried`.
@@ -79,4 +90,4 @@ function printAndExit(obj, code = 0) {
   process.exit(code);
 }
 
-module.exports = { run, git, tail, loadManifest, saveManifest, printAndExit, runWithFlakeRetry };
+module.exports = { run, git, gitLines, tail, loadManifest, saveManifest, printAndExit, runWithFlakeRetry };

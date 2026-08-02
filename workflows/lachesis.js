@@ -130,7 +130,7 @@ async function getState(phaseName) {
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
 
-const MIN_STATE_VERSION = '0.5.0'
+const MIN_STATE_VERSION = '0.6.8'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -176,6 +176,15 @@ const maxPassesRaw = num(runArgs && runArgs.maxPasses, num(dr.maxPasses, 6))
 const maxPasses = Math.max(greensTarget, maxPassesRaw)
 if (maxPasses !== maxPassesRaw) log(`maxPasses raised to greensTarget (${greensTarget}): a budget below the target cannot be satisfied`)
 if (runArgs && (runArgs.greensTarget != null || runArgs.maxPasses != null)) log(`Loop overrides from args: greensTarget=${greensTarget}, maxPasses=${maxPasses}`)
+
+// Single-green mode: with a greens target of 1, a verdict failure that
+// survives the foreign-flake guard parks the run at lachesis:pass-verdict
+// for the human instead of auto-continuing into a fresh multi-hour pass.
+// args.passContinue: true on re-entry authorizes exactly one continuation
+// into the next pass; a further failure escalates again.
+const passContinue = !!(runArgs && (runArgs.passContinue === true || runArgs.passContinue === 'true'))
+let passContinueBudget = passContinue ? 1 : 0
+if (passContinue) log('args.passContinue: one continuation into the next pass is authorized')
 
 const unitId = manifest.unitId
 const safeId = unitId.replace(/[^a-zA-Z0-9._-]/g, '-')
@@ -266,6 +275,10 @@ function contextPackage(passN) {
   )
 }
 
+// Recovered foreign-test flakes per pass, harvested from every verdict
+// round — a continuation's verdict replaces the verdict object, not the
+// occurrence, and the pass record and learnings ledger keep it.
+const flakesByPass = new Map()
 async function runVerdict(n, branch) {
   // A relay can answer ok:true with no output at all (the schema requires
   // only `ok`); returning that undefined crashes the loop at verdict.pass
@@ -278,7 +291,11 @@ async function runVerdict(n, branch) {
       attempt === 1 ? `talos:verdict-${n}` : `talos:verdict-${n}-retry`,
       'Build loop'
     )
-    if (v && v.output && typeof v.output.pass === 'boolean') return v.output
+    if (v && v.output && typeof v.output.pass === 'boolean') {
+      const foreign = (v.output.flags || []).filter((f) => f.name === 'foreign-test-flake-retry' && f.recovered)
+      if (foreign.length) flakesByPass.set(n, (flakesByPass.get(n) || []).concat(foreign.flatMap((f) => f.tests || [])))
+      return v.output
+    }
     log(`verdict relay returned no usable output for pass ${n} — ${attempt === 1 ? 'one fresh retry' : 'treating the round as failed'}`)
   }
   return { pass: false, checks: [], error: 'verdict relay dropped its output after a retry' }
@@ -349,6 +366,13 @@ async function runFuries(n, branch, onlyKeys) {
 
 // -------------------------------------------------------------- The Q4 loop
 let greens = passes.filter((p) => p.outcome === 'green').length
+// The re-entry authorization is spent by the loop entry itself: a resumed
+// run's recorded failure already escalated once, so the next pass this
+// invocation opens is the one continuation the flag buys.
+if (greensTarget === 1 && passContinueBudget > 0 && passes.length && greens < greensTarget) {
+  passContinueBudget--
+  log(`passContinue: authorization spent on pass ${passes.length + 1}`)
+}
 while (greens < greensTarget && passes.length < maxPasses) {
   const n = passes.length + 1
   const branch = `${baseBranch}-pass-${n}`
@@ -415,6 +439,7 @@ while (greens < greensTarget && passes.length < maxPasses) {
     for (const l of fury.lows) if (!lowFindingsLedger.includes(l)) lowFindingsLedger.push(l)
   }
 
+  const flakes = flakesByPass.get(n) || []
   const entry = {
     n,
     outcome,
@@ -423,6 +448,7 @@ while (greens < greensTarget && passes.length < maxPasses) {
     flaggedDecisions: dev ? dev.flaggedDecisions : [],
     verdict: verdict ? { pass: verdict.pass, failed: (verdict.checks || []).filter((c) => !c.ok).map((c) => c.name), flags: verdict.flags || [] } : null,
     furies: fury ? { run: fury.furiesRun, unresolvedHighs: outcome === 'green' ? 0 : fury.confirmedHighs.length } : null,
+    ...(flakes.length ? { flakes } : {}),
   }
   passes.push(entry)
   if (outcome === 'green') greens++
@@ -434,7 +460,7 @@ while (greens < greensTarget && passes.length < maxPasses) {
   }
   // Manifest carries the hot path only; full pass details and the LOW-
   // findings ledger live in sidecars (docs/adr/0001).
-  const passesSlim = passes.map((p) => ({ n: p.n, outcome: p.outcome, branch: p.branch, flaggedDecisions: p.flaggedDecisions }))
+  const passesSlim = passes.map((p) => ({ n: p.n, outcome: p.outcome, branch: p.branch, flaggedDecisions: p.flaggedDecisions, ...(p.flakes && p.flakes.length ? { flakes: p.flakes } : {}) }))
   await talos(`olympus-state merge ${esc({ passes: passesSlim })}`, `talos:record-${n}`, 'Build loop')
   await talosSoft(`olympus-state sidecar set pass-details ${esc({ passes })}`, `talos:record-detail-${n}`, 'Build loop')
   await talosSoft(`olympus-state sidecar set low-findings ${esc({ lowFindings: lowFindingsLedger.slice(0, 40) })}`, `talos:record-lows-${n}`, 'Build loop')
@@ -448,6 +474,12 @@ while (greens < greensTarget && passes.length < maxPasses) {
     const failedNames = (verdict.checks || []).filter((c) => !c.ok).map((c) => c.name).join(', ')
     await talosSoft(`olympus-state learn ${esc(`Pass ${n} did not go green (${outcome}; failing: ${failedNames || 'n/a'}) — fix hypotheses recorded this pass are refuted by the verdict.`)} --status refuted`, `talos:promote-${n}`, 'Build loop')
   }
+  if (flakes.length) {
+    await talosSoft(
+      `olympus-state learn ${esc(`Pass ${n} verdict: foreign-test flake retried green — ${flakes.map((t) => `${t.file}${t.test ? ` > ${t.test}` : ''}${t.signature ? ` [${t.signature}]` : ''}`).join('; ')}. The failing tests lay outside the pass diff and the frozen suite; the single re-run was green and the check counted green.`)} --status fact`,
+      `talos:flake-${n}`, 'Build loop'
+    )
+  }
   log(`Pass ${n}: ${outcome} (${greens}/${greensTarget} green, ${passes.length}/${maxPasses} passes)`)
 
   if (greens < greensTarget && passes.length < maxPasses) {
@@ -460,6 +492,29 @@ while (greens < greensTarget && passes.length < maxPasses) {
     if (mentor && mentor.decision === 'abort') {
       await talos(`olympus-state step build-loop aborted ${esc({ route: mentor.route, evidence: mentor.evidence })}`, 'talos:abort', 'Build loop')
       return escalate(`lachesis:${mentor.route}`, mentor.evidence, { unit: unitId, passesRun: passes.length, greens })
+    }
+    // Single-green seam: Mentor consolidated the learnings above, but the
+    // continue call is not his here — a verdict failure parks the run for
+    // the human unless the re-entry flag bought this continuation.
+    if (greensTarget === 1 && verdict && !verdict.pass) {
+      if (passContinueBudget > 0) {
+        passContinueBudget--
+        log(`passContinue: authorization spent on pass ${passes.length + 1}`)
+      } else {
+        const failedItems = (verdict.checks || []).filter((c) => !c.ok).map((c) => `${c.name} (exit ${c.exitCode}):\n${c.tail}`)
+        await talos(`olympus-state step build-loop escalated ${esc({ seam: 'pass-verdict', afterPass: n })}`, 'talos:pass-verdict', 'Build loop')
+        return escalate(
+          'lachesis:pass-verdict',
+          failedItems.length ? failedItems : [verdict.error || 'verdict failed with no failing check detail'],
+          {
+            unit: unitId,
+            passesRun: passes.length,
+            greens,
+            ...(mentor && mentor.consolidated ? { learningsSummary: mentor.consolidated } : {}),
+            resume: 'a fresh pass launches only on explicit re-entry: re-run olympus:lachesis with args.passContinue: true',
+          }
+        )
+      }
     }
   }
 }

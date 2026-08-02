@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.8 — 2026-08-02
+
+- olympus-verdict: foreign-test flake guard — a failing suite layer whose every named failing test lies outside the unit (not a frozen-suite path, untouched by the pass diff) is re-run ONCE before the verdict records it; a green re-run counts green, flagged `foreign-test-flake-retry` with (file, test, signature) per test, and a second failure stands (found live on pass 1 of 3-4-checkout-shipping-vat: two browser-mode component tests from another unit, untouched by the pass diff and green in the dev's own run minutes earlier, burned a multi-hour fresh pass on a false fail); extraction reads failure-marker lines only, and a tail with no extractable test file never fires the guard
+- lachesis: recovered foreign flakes are harvested from every verdict round into the manifest pass record (`flakes`) and the learnings ledger as harness-recorded facts
+- lachesis: single-green escalation seam — with `greensTarget: 1` a verdict failure that survives the flake guard escalates at `lachesis:pass-verdict` (failing checks verbatim, Mentor's consolidated learnings summary when available, resume instruction) instead of auto-continuing into a fresh pass; re-entry with `args.passContinue: true` (normalized like the other args) authorizes exactly one continuation into the next pass; targets above 1 keep the Mentor auto-continue unchanged, and Mentor's learnings consolidation runs in both modes; MIN_STATE_VERSION 0.6.8
+- hermes documents the `lachesis:pass-verdict` seam and the `passContinue` re-entry; config README documents the single-green loop shape
+
 ## 0.6.7 — 2026-08-01
 
 - all three Fates: `getState` no longer accepts a relayed manifest that arrives without its `keys` list — that is the exact truncation signature (found live twice: the atropos "no judged winner" false escalation and a lachesis crash on `manifest.conventions` after the state relay returned 3.5KB of a 15KB manifest); keyless relays retry once, then fail as relay corruption, never as state truth
