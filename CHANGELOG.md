@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-08-05
+
+- detached jobs (docs/adr/0006): the suite-running bins — olympus-redstate, olympus-verdict, olympus-adversary — gain a start/poll contract over shared plumbing (`bin/olympus-job-lib.js`); a full suite's wall time exceeds the ~600 s relay command cap, and the one-shot foreground shape produced twin orphaned suite runs that died at session teardown with empty output (found live twice, same unit, 2026-08). `start` spawns the run as a detached child that survives the invoker, writes handle/progress/result/log under `<runDir>/jobs/` (self-ignored via a generated .gitignore), and answers in seconds; a second start attaches to the live job instead of spawning a twin, refuses on an argsKey mismatch, and clears+respawns finished or dead jobs (dead pid without result → `staleCleared`). `status [--wait <seconds>]` blocks inside the bin (poll spacing — workflow scripts have no clock) and answers running+progress, a crash report with log tail, or the final JSON verbatim; results are never consumed by reading. Bare/`sweep` invocations stay synchronous for quick suites; state/branch/freeze bins keep their quick single-shot shape
+- clotho: red-state and the adversary kill sweep run via start/poll (bounded 60 polls × 480 s window ≈ 8 h ceiling); escalation is reserved for unstartable/crashed jobs and an exhausted poll budget, never for "still running"; MIN_STATE_VERSION 0.7.0
+- lachesis: the pass verdict runs via start/poll; an unusable final relay recovers with a cheap `status --wait 0` re-read of the persisted result file, never a suite re-run; MIN_STATE_VERSION 0.7.0
+- talos: `start`/`status` job modes documented — a `running: true` status answer is the script's own JSON to relay verbatim, never a reason to wait for or hunt the detached job
+- CONTEXT.md detached-job vocabulary (detached job, poll window); config README documents `runs/<unit>/jobs/`
+
 ## 0.6.8 — 2026-08-02
 
 - olympus-verdict: foreign-test flake guard — a failing suite layer whose every named failing test lies outside the unit (not a frozen-suite path, untouched by the pass diff) is re-run ONCE before the verdict records it; a green re-run counts green, flagged `foreign-test-flake-retry` with (file, test, signature) per test, and a second failure stands (found live on pass 1 of 3-4-checkout-shipping-vat: two browser-mode component tests from another unit, untouched by the pass diff and green in the dev's own run minutes earlier, burned a multi-hour fresh pass on a false fail); extraction reads failure-marker lines only, and a tail with no extractable test file never fires the guard

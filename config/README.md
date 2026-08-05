@@ -9,6 +9,8 @@ Each project the harness runs in carries an `.olympus/` directory:
     active-run.json    which run is live (absent between runs)
     last-run.json      the most recent closed run (unit, outcome, PR)
     runs/<unit>/       manifest.json, learnings.md, traceability.md, verdict-pass-N.json
+      jobs/            transient detached-job files (handle, progress, result,
+                       log per job); self-ignored via a generated .gitignore
 ```
 
 Prometheus (`/olympus:prometheus`) writes this file during init; it can

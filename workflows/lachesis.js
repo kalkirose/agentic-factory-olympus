@@ -89,6 +89,42 @@ async function talosSoft(scriptWithArgs, label, phaseName) {
   }
 }
 
+// ---- detached-job dispatch: a full suite outruns any single relay window,
+// so the long bins expose start/status — `start` spawns the run detached
+// and answers in seconds; each `status --wait` blocks INSIDE the bin for
+// one bounded window and answers running, crashed, or the final JSON. The
+// workflow only counts polls: spacing lives in the bin, because workflow
+// scripts have no clock. Start is idempotent (a live job answers with its
+// handle, never a twin), so retrying it is safe. ----
+const JOB_POLL_WINDOW_S = 480 // one status call blocks up to this long, inside the relay's command ceiling
+const JOB_MAX_POLLS = 60 // ~8h wall ceiling before the caller escalates
+async function runJob(startCmd, statusCmd, label, phaseName) {
+  let start = await talos(startCmd, `${label}-start`, phaseName)
+  if (!start.ok && !(start.output && start.output.running === true)) {
+    start = await talos(startCmd, `${label}-start-retry`, phaseName)
+  }
+  if (!start.ok) {
+    const o = start.output || {}
+    return { ok: false, output: o, errorTail: o.error || start.errorTail || `job start failed for: ${startCmd}` }
+  }
+  let relayMisses = 0
+  for (let poll = 1; poll <= JOB_MAX_POLLS; poll++) {
+    const st = await talos(statusCmd, `${label}-poll-${poll}`, phaseName)
+    if (!st.output) {
+      // Relay glitch (talos retried once already); the job itself is untouched.
+      relayMisses++
+      if (relayMisses >= 3) return { ok: false, errorTail: `status relay failed ${relayMisses} times for: ${statusCmd}` }
+      continue
+    }
+    if (st.output.running === true) continue
+    return st // final JSON (ok mirrors the script's ok) or a crash report
+  }
+  return {
+    ok: false,
+    errorTail: `job still running after ${JOB_MAX_POLLS} polls (~${Math.round((JOB_MAX_POLLS * JOB_POLL_WINDOW_S) / 3600)}h): ${startCmd} — inspect or kill the pid recorded in the job handle under the run directory's jobs/, then re-run to resume`,
+  }
+}
+
 // ---- Fable-seat dispatch: Minos runs the fable model class by definition; when
 // that dispatch dies the -opus variant (same role, Opus-tuned prompt) takes
 // the seat, logged and recorded. Config models.fableSeats: 'auto' (default)
@@ -130,7 +166,7 @@ async function getState(phaseName) {
   return { ok: false, errorTail: 'state relay corrupt after retry (integrity guard: relayed manifest missing declared keys)' }
 }
 
-const MIN_STATE_VERSION = '0.6.8'
+const MIN_STATE_VERSION = '0.7.0'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -280,25 +316,29 @@ function contextPackage(passN) {
 // occurrence, and the pass record and learnings ledger keep it.
 const flakesByPass = new Map()
 async function runVerdict(n, branch) {
-  // A relay can answer ok:true with no output at all (the schema requires
-  // only `ok`); returning that undefined crashes the loop at verdict.pass
-  // (found live, pass 1 of 3-3-preview-deploys). No usable output after one
-  // fresh retry degrades to a failed round — never state truth, never a
-  // crash.
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const v = await talos(
-      `olympus-verdict --pass ${n} --expect-branch "${branch}"`,
-      attempt === 1 ? `talos:verdict-${n}` : `talos:verdict-${n}-retry`,
-      'Build loop'
-    )
-    if (v && v.output && typeof v.output.pass === 'boolean') {
-      const foreign = (v.output.flags || []).filter((f) => f.name === 'foreign-test-flake-retry' && f.recovered)
-      if (foreign.length) flakesByPass.set(n, (flakesByPass.get(n) || []).concat(foreign.flatMap((f) => f.tests || [])))
-      return v.output
-    }
-    log(`verdict relay returned no usable output for pass ${n} — ${attempt === 1 ? 'one fresh retry' : 'treating the round as failed'}`)
+  // The verdict runs as a detached job: the suite survives any relay
+  // ceiling, and "still running" is a poll answer, never a failure. A
+  // relay can answer ok:true with no usable output at all (the schema
+  // requires only `ok`); the job's result file survives on disk, so the
+  // recovery is a cheap status re-read — never a suite re-run. No usable
+  // output after the re-read degrades to a failed round — never state
+  // truth, never a crash.
+  let v = await runJob(
+    `olympus-verdict start --pass ${n} --expect-branch "${branch}"`,
+    `olympus-verdict status --wait ${JOB_POLL_WINDOW_S}`,
+    `talos:verdict-${n}`, 'Build loop'
+  )
+  if (!(v && v.output && typeof v.output.pass === 'boolean') && !(v && v.errorTail)) {
+    log(`verdict relay returned no usable output for pass ${n} — one status re-read`)
+    v = await talos('olympus-verdict status --wait 0', `talos:verdict-${n}-reread`, 'Build loop')
   }
-  return { pass: false, checks: [], error: 'verdict relay dropped its output after a retry' }
+  if (v && v.output && typeof v.output.pass === 'boolean') {
+    const foreign = (v.output.flags || []).filter((f) => f.name === 'foreign-test-flake-retry' && f.recovered)
+    if (foreign.length) flakesByPass.set(n, (flakesByPass.get(n) || []).concat(foreign.flatMap((f) => f.tests || [])))
+    return v.output
+  }
+  log(`verdict round for pass ${n} produced no usable verdict — treating the round as failed`)
+  return { pass: false, checks: [], error: (v && v.errorTail) ? `verdict job failed: ${v.errorTail}` : 'verdict relay dropped its output after a re-read' }
 }
 
 function failedChecksSummary(verdict) {

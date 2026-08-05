@@ -25,6 +25,17 @@ assumed.
 The check that a relayed manifest contains every key the script declared. A
 failed guard is a relay failure to retry or escalate, never state truth.
 
+**Detached job**:
+A suite run a bin script spawns to outlive any relay window. `start` answers
+with a handle in seconds; the job writes progress and final results under the
+run directory; `status` answers running, crashed, or the final JSON. A second
+start while the job lives returns the live handle, never a twin.
+_Avoid_: background run, async run
+
+**Poll window**:
+The bounded wait a `status` call performs inside the bin before it answers
+`running`. Poll spacing lives in the bin; workflow scripts have no clock.
+
 **Normalized args**:
 The object form of a workflow invocation's args, parsed once at the top of
 every workflow script; the runtime may deliver args as a JSON string, and a

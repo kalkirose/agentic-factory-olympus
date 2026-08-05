@@ -77,7 +77,7 @@ async function seat(prompt, opts) {
   }
   return null
 }
-const MIN_STATE_VERSION = '0.6.0'
+const MIN_STATE_VERSION = '0.7.0'
 function versionLt(a, b) {
   const pa = String(a).split('.').map(Number)
   const pb = String(b).split('.').map(Number)
@@ -112,6 +112,42 @@ async function stepMust(scriptWithArgs, label, phaseName) {
     r = await talos(scriptWithArgs, `${label}-rewrite`, phaseName)
   }
   return r
+}
+
+// ---- detached-job dispatch: a full suite outruns any single relay window,
+// so the long bins expose start/status — `start` spawns the run detached
+// and answers in seconds; each `status --wait` blocks INSIDE the bin for
+// one bounded window and answers running, crashed, or the final JSON. The
+// workflow only counts polls: spacing lives in the bin, because workflow
+// scripts have no clock. Start is idempotent (a live job answers with its
+// handle, never a twin), so retrying it is safe. ----
+const JOB_POLL_WINDOW_S = 480 // one status call blocks up to this long, inside the relay's command ceiling
+const JOB_MAX_POLLS = 60 // ~8h wall ceiling before the caller escalates
+async function runJob(startCmd, statusCmd, label, phaseName) {
+  let start = await talos(startCmd, `${label}-start`, phaseName)
+  if (!start.ok && !(start.output && start.output.running === true)) {
+    start = await talos(startCmd, `${label}-start-retry`, phaseName)
+  }
+  if (!start.ok) {
+    const o = start.output || {}
+    return { ok: false, output: o, errorTail: o.error || start.errorTail || `job start failed for: ${startCmd}` }
+  }
+  let relayMisses = 0
+  for (let poll = 1; poll <= JOB_MAX_POLLS; poll++) {
+    const st = await talos(statusCmd, `${label}-poll-${poll}`, phaseName)
+    if (!st.output) {
+      // Relay glitch (talos retried once already); the job itself is untouched.
+      relayMisses++
+      if (relayMisses >= 3) return { ok: false, errorTail: `status relay failed ${relayMisses} times for: ${statusCmd}` }
+      continue
+    }
+    if (st.output.running === true) continue
+    return st // final JSON (ok mirrors the script's ok) or a crash report
+  }
+  return {
+    ok: false,
+    errorTail: `job still running after ${JOB_MAX_POLLS} polls (~${Math.round((JOB_MAX_POLLS * JOB_POLL_WINDOW_S) / 3600)}h): ${startCmd} — inspect or kill the pid recorded in the job handle under the run directory's jobs/, then re-run to resume`,
+  }
 }
 
 // ---- Fable-seat dispatch: the judgment seats (cassandra, daedalus, minos)
@@ -477,11 +513,10 @@ async function authorAndValidate(passLabel, extraPrompt) {
       await talos(`olympus-state merge ${esc({ authoredSuite: { files: suite.testFiles, matrixPath: suite.matrixPath, label: passLabel } })}`, 'talos:authored-record', 'Tests')
     }
 
-    let red = await talos('olympus-redstate', 'talos:redstate', 'Tests')
-    if (!red.ok) {
-      log('red-state run failed to execute — one fresh relay retry')
-      red = await talos('olympus-redstate', 'talos:redstate-retry', 'Tests')
-    }
+    // The red-state suite runs as a detached job: the run survives any
+    // relay ceiling, and only a crashed or unstartable job escalates —
+    // "still running" is a poll answer, never a failure.
+    const red = await runJob('olympus-redstate start', `olympus-redstate status --wait ${JOB_POLL_WINDOW_S}`, 'talos:redstate', 'Tests')
     if (!red.ok) return { error: escalate('clotho:environment', [`red-state run failed to execute: ${red.errorTail || JSON.stringify(red.output)}`]) }
 
     const argus = await seat(
@@ -524,7 +559,13 @@ async function authorAndValidate(passLabel, extraPrompt) {
 async function killSweep(suite, label) {
   if (!tr.adversaryCount || !tr.killRateCommand) return null
   const cmd = tr.killRateCommand.split('{tests}').join(suite.testFiles.map((f) => `"${f}"`).join(' '))
-  const sweep = await talos(`olympus-adversary sweep --dir "${adversaryDir}" --command ${esc(cmd)}`, `talos:sweep-${label}`, 'Tests')
+  // One suite run per wrong implementation: detached job, same reasoning
+  // as red-state.
+  const sweep = await runJob(
+    `olympus-adversary start --dir "${adversaryDir}" --command ${esc(cmd)}`,
+    `olympus-adversary status --wait ${JOB_POLL_WINDOW_S}`,
+    `talos:sweep-${label}`, 'Tests'
+  )
   if (!sweep.ok) {
     log(`kill sweep failed for ${label}: ${sweep.errorTail || JSON.stringify(sweep.output)}`)
     return null
