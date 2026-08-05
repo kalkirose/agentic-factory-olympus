@@ -267,12 +267,20 @@ await talos(`olympus-state merge ${esc({ pr: { url: hebe.url, checks: hebe.check
 // branch of this unit is dead weight — the freeze commit and the losing
 // passes live on in the winner's history and the discarded refs. The winner
 // branch itself must survive until the human merges (deleting a PR's head
-// closes the PR); the post-merge `close --sweep` collects it. Non-fatal:
-// a failed sweep costs tidiness, never the run.
+// closes the PR); the post-merge `close --sweep` collects it. Two-phase:
+// a read-only --list resolves the targets, then the destructive relay is
+// invoked with every victim spelled out by name — its transcript must
+// record what it deletes, never a pattern. Non-fatal: a failed sweep
+// costs tidiness, never the run.
 const unitPrefix = ((manifest.conventions && manifest.conventions.branchTemplate) || 'story/{unit}').replace('{unit}', manifest.unitId)
-const prSweep = await talosSoft(`olympus-branch sweep --prefix "${unitPrefix}" --keep "${manifest.judge.winner}" --remote`, 'talos:pr-open-sweep', 'Ship')
-if (prSweep.ok && prSweep.output && Array.isArray(prSweep.output.deleted) && prSweep.output.deleted.length) {
-  log(`PR-open sweep: deleted ${prSweep.output.deleted.join(', ')}`)
+const sweepPlan = await talosSoft(`olympus-branch sweep --prefix "${unitPrefix}" --keep "${manifest.judge.winner}" --remote --list`, 'talos:pr-sweep-plan', 'Ship')
+const sweepTargets = sweepPlan.ok && sweepPlan.output && Array.isArray(sweepPlan.output.planned) ? sweepPlan.output.planned : []
+if (sweepTargets.length) {
+  log(`PR-open sweep targets: ${sweepTargets.join(', ')}`)
+  const prSweep = await talosSoft(`olympus-branch sweep --named "${sweepTargets.join(',')}" --keep "${manifest.judge.winner}"`, 'talos:pr-open-sweep', 'Ship')
+  if (prSweep.ok && prSweep.output && Array.isArray(prSweep.output.deleted) && prSweep.output.deleted.length) {
+    log(`PR-open sweep: deleted ${prSweep.output.deleted.join(', ')}`)
+  }
 }
 
 // The merge is human-owned and asynchronous — no harness process is alive

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 — 2026-08-05
+
+- olympus-branch: `sweep` is two-phase — `--list` resolves the prefix to concrete branch names and deletes nothing; `--named <branch,origin/branch,...>` deletes exactly the named branches (keep/checked-out guards and the discarded-ref recovery contract, docs/adr/0005, unchanged); a destructive invocation that carries a bare prefix is refused. Pattern deletion hid the victims from the invocation record — flagged live by a security review of the PR-open sweep relay (2026-08-05)
+- atropos: the PR-open sweep resolves its targets via `--list`, logs them, and invokes the destructive relay with `--named`, so the Talos transcript names every branch before it is deleted; an empty plan skips the destructive relay entirely
+
 ## 0.7.0 — 2026-08-05
 
 - detached jobs (docs/adr/0006): the suite-running bins — olympus-redstate, olympus-verdict, olympus-adversary — gain a start/poll contract over shared plumbing (`bin/olympus-job-lib.js`); a full suite's wall time exceeds the ~600 s relay command cap, and the one-shot foreground shape produced twin orphaned suite runs that died at session teardown with empty output (found live twice, same unit, 2026-08). `start` spawns the run as a detached child that survives the invoker, writes handle/progress/result/log under `<runDir>/jobs/` (self-ignored via a generated .gitignore), and answers in seconds; a second start attaches to the live job instead of spawning a twin, refuses on an argsKey mismatch, and clears+respawns finished or dead jobs (dead pid without result → `staleCleared`). `status [--wait <seconds>]` blocks inside the bin (poll spacing — workflow scripts have no clock) and answers running+progress, a crash report with log tail, or the final JSON verbatim; results are never consumed by reading. Bare/`sweep` invocations stay synchronous for quick suites; state/branch/freeze bins keep their quick single-shot shape
