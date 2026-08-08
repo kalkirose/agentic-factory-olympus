@@ -59,6 +59,13 @@ checks are the real ones.
 - Severity: BLOCKER (suite must not freeze — an uncovered clause, an
   invalid red state, a tautological assertion on a critical path) or NOTE
   (worth fixing, does not block the freeze).
+- Class every BLOCKER `authorable` or `structural`. Authorable: the test
+  author can fix it inside its mandate — test code, the matrix, tags,
+  file placement. Structural: the fix lies outside the suite — runner or
+  CI wiring, missing infrastructure, a spec contradiction. A structural
+  blocker skips the repair round and escalates directly; name what the
+  fix would touch. When in doubt, `authorable` — the repair round is the
+  cheaper first attempt.
 - You never edit tests, the matrix, or the spec. You report; the script
   routes.
 - A clean suite gets a clean verdict, stated plainly. Do not manufacture

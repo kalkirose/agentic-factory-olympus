@@ -478,6 +478,7 @@ const ARGUS_SCHEMA = {
         type: 'object',
         properties: {
           severity: { type: 'string', enum: ['BLOCKER', 'NOTE'] },
+          class: { type: 'string', enum: ['authorable', 'structural'] },
           summary: { type: 'string' },
           evidence: { type: 'string' },
         },
@@ -573,6 +574,20 @@ async function authorAndValidate(passLabel, extraPrompt) {
     )
     if (!argus) return { error: escalate('clotho:seat', ['Argus (validator) returned nothing after a retry — re-run olympus:clotho to resume']) }
     const blockers = argus.findings.filter((f) => f.severity === 'BLOCKER')
+    // A structural blocker's fix lies outside the test author's mandate
+    // (runner/CI wiring, missing infrastructure, a spec contradiction) — a
+    // repair round cannot clear it and costs a full suite run. Escalate
+    // directly, listing every blocker; missing class defaults to authorable.
+    const structural = blockers.filter((f) => f.class === 'structural')
+    if (structural.length) {
+      await talosSoft(`olympus-state step test-author escalated ${esc({ blockers: blockers.length, structural: structural.length })}`, 'talos:step', 'Tests')
+      return {
+        error: escalate('clotho:tests', blockers.map((f) => `BLOCKER (${f.class === 'structural' ? 'structural' : 'authorable'}): ${f.summary} (${f.evidence})`), {
+          unit: iris.unitId,
+          note: `${structural.length} structural blocker(s) — fix lies outside the test author's mandate; ${round === 1 ? 'no repair round attempted' : 'no further repair round attempted'}`,
+        }),
+      }
+    }
     if (argus.verdict === 'pass' && blockers.length === 0) {
       // The done write is verified: freezing over a dangling 'started' would
       // make the resume protocol treat finished authoring as torn.

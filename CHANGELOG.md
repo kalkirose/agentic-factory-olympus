@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 — 2026-08-08
+
+- clotho: the suite-validation repair loop routes BLOCKERs by class — argus classes every BLOCKER `authorable` (fixable inside the test author's mandate: test code, matrix, tags, file placement; default when the class is absent) or `structural` (the fix lies outside the suite: runner/CI wiring, missing infrastructure, a spec contradiction); any structural blocker escalates directly with every blocker listed — no repair dispatch, no red-state re-run — while authorable-only findings keep the one repair round (found live 2026-08-08: a visual spec executed by no runner drew a doomed repair round — a full author dispatch, suite run, and re-validation — against a finding the tests-only seat was never allowed to fix)
+
 ## 0.7.2 — 2026-08-08
 
 - clotho: the spec gate routes REVISIONs by class — cassandra sub-classifies every REVISION `mechanical` (the repository settles the correct resolution singly and clearly; no AC meaning, scope boundary, or trade-off at stake) or `intent` (default when the class is absent); mechanical findings are applied by a Themis fix dispatch (verify-then-apply, whole-spec-home sweep for the same wrong fact, spec-home commit `distill(<unit>): apply mechanical spec fixes`) and re-validated in place without consuming the 2-round human budget; two fix dispatches per invocation, then everything escalates rather than loop; a failed or partial dispatch escalates the leftovers explicitly, never drops them (found live 2026-08-08: two repo-settled findings — wrong framework event names, a CI provisioning line — escalated verbatim to a human who had already delegated exactly this class of correction)
