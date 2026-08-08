@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.4 — 2026-08-08
+
+- clotho: the single-suite path commits the authored suite (olympus-freeze) BEFORE the adversary kill sweep — the adversary bin refuses a dirty tree, so the pre-commit sweep soft-failed to 'unmeasured' on every single-suite run to date (found live 2026-08-08: the failing run plus two prior unit manifests with no killRate record); refinement refreezes and the Freeze phase records the definitive SHA, both unchanged
+- clotho: Daedalus testFiles are sanitized at every intake site — trailing parenthesized annotations are stripped loudly before the list feeds authored-record merges, sweep commands, and git pathspecs (found live 2026-08-08: four "path (amended)" entries killed the freeze's git add)
+- daedalus + daedalus-opus: the tests-only mandate is spelled out — test files and the matrix, nothing else, repair rounds included; a validator finding whose fix lies outside the mandate goes in `deviations` for the script to route, never applied (found live 2026-08-08: a repair round reverted a committed runner fix, deleted its script, and edited CI workflow config to appease a frozen script-shape assertion — silently); frozen-test amendments require the spec to name the supersession; testFiles entries are verbatim paths, no annotations
+
 ## 0.7.3 — 2026-08-08
 
 - clotho: the suite-validation repair loop routes BLOCKERs by class — argus classes every BLOCKER `authorable` (fixable inside the test author's mandate: test code, matrix, tags, file placement; default when the class is absent) or `structural` (the fix lies outside the suite: runner/CI wiring, missing infrastructure, a spec contradiction); any structural blocker escalates directly with every blocker listed — no repair dispatch, no red-state re-run — while authorable-only findings keep the one repair round (found live 2026-08-08: a visual spec executed by no runner drew a doomed repair round — a full author dispatch, suite run, and re-validation — against a finding the tests-only seat was never allowed to fix)

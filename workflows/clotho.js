@@ -529,6 +529,17 @@ const TEST_MINOS_SCHEMA = {
   required: ['scores', 'winner', 'rationale'],
 }
 
+// Daedalus file lists feed shell commands and git pathspecs verbatim; a
+// prose annotation on a path entry breaks the freeze. Strip trailing
+// parenthesized annotations, loudly — the entry itself stays intact.
+function sanitizeTestFiles(files) {
+  return files.map((f) => {
+    const clean = f.replace(/\s+\([^)]*\)\s*$/, '').trim()
+    if (clean !== f) log(`test-file entry carried an annotation — stripped: "${f}"`)
+    return clean
+  })
+}
+
 // Author one suite on the current branch; validate; return the candidate
 // record or an escalation-shaped error. One Argus repair round included.
 async function authorAndValidate(passLabel, extraPrompt) {
@@ -541,7 +552,7 @@ async function authorAndValidate(passLabel, extraPrompt) {
     // still gate the reused suite.
     const recorded = manifest.authoredSuite
     if (round === 1 && !argusFindings && recorded && recorded.label === passLabel && Array.isArray(recorded.files) && recorded.files.length) {
-      suite = { testFiles: recorded.files, matrixPath: recorded.matrixPath, findings: [], deviations: [] }
+      suite = { testFiles: sanitizeTestFiles(recorded.files), matrixPath: recorded.matrixPath, findings: [], deviations: [] }
       log(`Reusing authored suite from the manifest for ${passLabel} (${recorded.files.length} files) — Daedalus dispatch skipped; red-state + Argus still gate it`)
     } else {
       suite = await seatAgent('daedalus',
@@ -556,6 +567,7 @@ async function authorAndValidate(passLabel, extraPrompt) {
         { schema: DAEDALUS_SCHEMA, label: `daedalus:${passLabel}-r${round}`, phase: 'Tests', effort: 'xhigh' }
       )
       if (!suite) return { error: escalate('clotho:seat', ['Daedalus (tests) returned nothing after retry and fallback — re-run olympus:clotho to resume']) }
+      suite.testFiles = sanitizeTestFiles(suite.testFiles)
       await talos(`olympus-state merge ${esc({ authoredSuite: { files: suite.testFiles, matrixPath: suite.matrixPath, label: passLabel } })}`, 'talos:authored-record', 'Tests')
     }
 
@@ -665,6 +677,7 @@ async function refineAgainstSurvivors(suite, survivors, passLabel) {
     )
     if (refined) {
       suite = refined
+      suite.testFiles = sanitizeTestFiles(suite.testFiles)
       await talos(`olympus-state merge ${esc({ authoredSuite: { files: suite.testFiles, matrixPath: suite.matrixPath, label: passLabel } })}`, `talos:authored-record-${round}`, 'Tests')
     }
     const done = await stepMust(`olympus-state step test-author done ${esc({ files: suite.testFiles.length, matrix: suite.matrixPath })}`, `talos:step-refine-done-${round}`, 'Tests')
@@ -714,6 +727,12 @@ if (!freezeComplete) {
     const r = await authorAndValidate('author', `Work on the current branch (${baseBranch}).\n`)
     if (r.error) return r.error
     let suite = r.suite
+    // The adversary bin refuses a dirty tree, and this path used to sweep
+    // BEFORE any commit — the sweep soft-failed to 'unmeasured' on every
+    // single-suite run. Commit the suite first; refinement refreezes, and
+    // the Freeze phase below records the definitive SHA.
+    const pc = await talos(`olympus-freeze --paths "${suite.testFiles.concat([suite.matrixPath]).join(',')}"`, 'talos:suite-commit', 'Tests')
+    if (!pc.ok) return escalate('clotho:state', [`suite pre-sweep commit failed: ${pc.errorTail || JSON.stringify(pc.output)}`])
     let sweep = await killSweep(suite, 'single')
     let survivors = sweep ? sweep.survivors : []
     if (sweep) await talos(`olympus-state merge ${esc({ testKillRate: { killRate: sweep.killRate, survivors } })}`, 'talos:kill-record', 'Tests')

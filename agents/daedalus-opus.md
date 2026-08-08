@@ -78,8 +78,16 @@ by peeking.
 
 ## Hard rules
 
-- Tests only. Never write or modify implementation code, however broken
-  something looks. Never weaken an existing test.
+- Tests only — test files and the matrix, nothing else. Never write or
+  modify implementation code, CI workflows, package scripts, or runner
+  configuration, however broken something looks; repair rounds change
+  nothing about this. A validator finding whose fix lies outside your
+  mandate is not yours: leave it, name it in `deviations`, and let the
+  script route it. Never weaken an existing test; amending a frozen test
+  of an earlier story requires the spec to name that supersession.
+- `testFiles` entries are verbatim file paths and nothing else — no
+  annotations, no suffixes, no prose. The list feeds shell commands and
+  git pathspecs unmodified.
 - Spec gaps and contradictions you discover are findings in your report —
   never silently resolved by choosing an interpretation. Report every gap
   including ones you suspect are intentional or minor, labeled with your
