@@ -119,6 +119,14 @@ re-deriving them.
 A spec divergence whose resolution changes intent. Never resolved by a
 seat; escalated to the human with options and consequences.
 
+**Mechanical finding**:
+A validation finding whose correct resolution the repository settles singly
+and clearly — a misnamed identifier, a wrong constant, a fact the installed
+code answers — with no AC meaning, scope boundary, or trade-off at stake.
+The spec gate applies it through a distillation fix dispatch and sweeps the
+spec home for the same wrong fact; it never escalates. When in doubt, it is
+an intent decision.
+
 ## Reconciliation
 
 **Reconciliation**:

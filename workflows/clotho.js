@@ -361,6 +361,7 @@ const CASSANDRA_SCHEMA = {
         type: 'object',
         properties: {
           severity: { type: 'string', enum: ['BLOCKER', 'REVISION', 'NOTE'] },
+          class: { type: 'string', enum: ['mechanical', 'intent'] },
           summary: { type: 'string' },
           evidence: { type: 'string' },
         },
@@ -369,6 +370,18 @@ const CASSANDRA_SCHEMA = {
     },
   },
   required: ['verdict', 'findings', 'findingsPath'],
+}
+// Mechanical spec-fix dispatch: applies repo-settled REVISIONs via the
+// distillation seat (the only seat allowed to edit a spec).
+const THEMIS_FIX_SCHEMA = {
+  type: 'object',
+  properties: {
+    applied: { type: 'number' },
+    unresolved: { type: 'array', items: { type: 'string' } },
+    filesChanged: { type: 'array', items: { type: 'string' } },
+    specCommit: { type: 'string' },
+  },
+  required: ['applied', 'unresolved', 'filesChanged'],
 }
 let cassandra = null
 if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
@@ -387,24 +400,56 @@ if (!steps['spec-validation'] || steps['spec-validation'].status !== 'done') {
   // A sign-off reset is persisted with the started write so a crash before
   // the verdict cannot resurrect the stored round count on the next resume.
   await talos(`olympus-state step spec-validation started${specSignoff ? ` ${esc({ rounds: 0 })}` : ''}`, 'talos:step', 'Spec')
-  cassandra = await seatAgent('cassandra',
-    `Validate the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}).\n` +
-      `Doc pointers live in .olympus/config.json under docPaths — retrieve on demand.\n` +
-      `Write your findings file to "${findingsPath}". Run all the checks from your definition.\n` +
-      `Distillation artifacts under "${runDir}" (intent-contract.md, claim-table.md) if present: verify INTENT FIDELITY (the spec must preserve every contract item; drift is a REVISION); claims already verified in the claim table need only spot-checks.`,
-    { schema: CASSANDRA_SCHEMA, label: 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
-  )
-  if (!cassandra) return escalate('clotho:seat', ['Cassandra (spec) returned nothing after retry and fallback — re-run olympus:clotho to resume'])
-  const hard = cassandra.findings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'REVISION')
-  if (cassandra.verdict === 'blocked' || hard.length > 0) {
+  // Mechanical findings — the repository settles the correct resolution
+  // singly and clearly — are applied by a distillation fix dispatch and
+  // re-validated in place; only intent findings reach the human and
+  // consume the round budget. Two fix dispatches per invocation, then
+  // everything escalates rather than loop.
+  let mechFixes = 0
+  for (;;) {
+    cassandra = await seatAgent('cassandra',
+      `Validate the spec at "${iris.specPath}" for unit ${iris.unitId} (${iris.title}).\n` +
+        `Doc pointers live in .olympus/config.json under docPaths — retrieve on demand.\n` +
+        `Write your findings file to "${findingsPath}". Run all the checks from your definition.\n` +
+        `Distillation artifacts under "${runDir}" (intent-contract.md, claim-table.md) if present: verify INTENT FIDELITY (the spec must preserve every contract item; drift is a REVISION); claims already verified in the claim table need only spot-checks.`,
+      { schema: CASSANDRA_SCHEMA, label: mechFixes ? `cassandra:spec-refix-${mechFixes}` : 'cassandra:spec', phase: 'Spec', effort: 'xhigh' }
+    )
+    if (!cassandra) return escalate('clotho:seat', ['Cassandra (spec) returned nothing after retry and fallback — re-run olympus:clotho to resume'])
+    const hard = cassandra.findings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'REVISION')
+    if (cassandra.verdict !== 'blocked' && hard.length === 0) break
+
+    const mechanical = hard.filter((f) => f.severity === 'REVISION' && f.class === 'mechanical')
+    const intent = hard.filter((f) => !mechanical.includes(f))
+    let unresolved = null
+    let applied = 0
+    if (mechanical.length && mechFixes < 2) {
+      mechFixes++
+      log(`Spec gate: applying ${mechanical.length} mechanical finding(s) — fix dispatch ${mechFixes} of 2`)
+      const fix = await seat(
+        `MECHANICAL SPEC-FIX for unit ${iris.unitId}. Spec: "${iris.specPath}". Findings file: "${cassandra.findingsPath}".\n` +
+          `Apply ONLY these findings — each is repo-settled; verify the correct fact against the repository yourself before writing, then apply the finding's proposal with the verified fact:\n` +
+          mechanical.map((f) => `- ${f.summary} (${f.evidence})`).join('\n') +
+          `\nNever change intent, AC meaning, AC ids, or scope — a fix that would is not yours; list it under "unresolved" instead. ` +
+          `Sweep the ENTIRE spec home (sibling specs, planning docs) for the same wrong fact and fix every occurrence — downstream specs must not re-surface it. ` +
+          `Obey the spec home repo's contribution rules from your definition; commit message: distill(${iris.unitId}): apply mechanical spec fixes.`,
+        { agentType: 'olympus:themis', schema: THEMIS_FIX_SCHEMA, label: `themis:mech-fix-${mechFixes}`, phase: 'Spec', effort: 'xhigh' }
+      )
+      unresolved = fix ? fix.unresolved || [] : mechanical.map((f) => `${f.summary} (${f.evidence})`)
+      applied = fix ? fix.applied : 0
+      if (applied) log(`Spec gate: ${applied} mechanical fix(es) applied${fix && fix.specCommit ? ` (${fix.specCommit})` : ''} — re-validating`)
+      if (!intent.length && !unresolved.length) continue
+    }
+
     const rounds = effectivePrev + 1
     await talos(`olympus-state step spec-validation escalated ${esc({ findingsPath: cassandra.findingsPath, rounds })}`, 'talos:step', 'Spec')
-    const items = hard.map((f) => `${f.severity}: ${f.summary} (${f.evidence})`)
+    const items = intent.map((f) => `${f.severity}: ${f.summary} (${f.evidence})`)
+    if (unresolved) items.push(...unresolved.map((u) => `REVISION (mechanical, left unapplied by the fix dispatch): ${u}`))
+    else if (mechanical.length) items.push(...mechanical.map((f) => `${f.severity}: ${f.summary} (${f.evidence})`))
     if (rounds >= 2) items.unshift('SPEC GATE NOT CONVERGING: round 2 of 2 — no further automatic validation passes; revise the spec with human sign-off, then re-run with args.specSignoff true.')
     return escalate(
       'clotho:spec',
       items,
-      { findingsPath: cassandra.findingsPath, unit: iris.unitId, rounds }
+      { findingsPath: cassandra.findingsPath, unit: iris.unitId, rounds, mechanicalApplied: applied }
     )
   }
   await talos(`olympus-state step spec-validation done ${esc({ findingsPath: cassandra.findingsPath, notes: cassandra.findings.length })}`, 'talos:step', 'Spec')

@@ -80,15 +80,22 @@ are pre-verified; spot-check rather than re-derive.
 - Every finding carries evidence: file:line, document section, or the exact
   conflicting quotes. No evidence, no finding.
 - Classify each finding: BLOCKER (spec cannot proceed as written),
-  REVISION (needs a human decision — these escalate), or NOTE (test author
-  should know; does not block).
+  REVISION (the spec must change before tests are authored), or NOTE
+  (test author should know; does not block).
+- Sub-classify every REVISION as `mechanical` or `intent`. A mechanical
+  finding is one whose correct resolution the repository settles singly
+  and clearly — a misnamed identifier, a wrong constant, a fact the
+  installed code answers — with no AC meaning, scope boundary, or
+  trade-off at stake; the harness applies your proposal without a human.
+  Everything else is `intent` — a human decides. When in doubt, `intent`.
 - Write all findings to the findings file the prompt names, then return the
   structured summary the output contract asks for. If you find nothing,
   say so plainly — do not manufacture findings to look thorough.
 - If you catch yourself filling a spec gap with the reasonable
   interpretation, stop — the guess itself is the finding.
-- You do not fix the spec. Proposed rewordings are allowed inside a
-  REVISION finding, labeled as proposals; the human decides.
+- You do not fix the spec. Every REVISION carries its proposed rewording,
+  labeled as a proposal; mechanical proposals are applied by the harness,
+  intent proposals wait for the human.
 - Every REVISION proposal names the mechanical check that proves the
   proposed edit closes the finding.
 - Findings-file entries use this shape:
@@ -96,6 +103,7 @@ are pre-verified; spot-check rather than re-derive.
 <finding-template>
 ### <BLOCKER|REVISION|NOTE> — <one-line summary>
 
+<REVISION only: Class: <mechanical|intent>>
 Evidence: <file:line, document section, or the exact conflicting quotes>
 <REVISION only: the proposed rewording, labeled as a proposal.>
 </finding-template>

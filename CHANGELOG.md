@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 — 2026-08-08
+
+- clotho: the spec gate routes REVISIONs by class — cassandra sub-classifies every REVISION `mechanical` (the repository settles the correct resolution singly and clearly; no AC meaning, scope boundary, or trade-off at stake) or `intent` (default when the class is absent); mechanical findings are applied by a Themis fix dispatch (verify-then-apply, whole-spec-home sweep for the same wrong fact, spec-home commit `distill(<unit>): apply mechanical spec fixes`) and re-validated in place without consuming the 2-round human budget; two fix dispatches per invocation, then everything escalates rather than loop; a failed or partial dispatch escalates the leftovers explicitly, never drops them (found live 2026-08-08: two repo-settled findings — wrong framework event names, a CI provisioning line — escalated verbatim to a human who had already delegated exactly this class of correction)
+- CONTEXT.md defines the mechanical finding; cassandra + cassandra-opus carry the sub-classification rule and the `Class:` line in the findings template (opus variant keeps its open-the-source injunction: a fact inferred but not read stays `intent`)
+
 ## 0.7.1 — 2026-08-05
 
 - olympus-branch: `sweep` is two-phase — `--list` resolves the prefix to concrete branch names and deletes nothing; `--named <branch,origin/branch,...>` deletes exactly the named branches (keep/checked-out guards and the discarded-ref recovery contract, docs/adr/0005, unchanged); a destructive invocation that carries a bare prefix is refused. Pattern deletion hid the victims from the invocation record — flagged live by a security review of the PR-open sweep relay (2026-08-05)
